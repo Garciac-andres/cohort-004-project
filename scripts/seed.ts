@@ -46,6 +46,7 @@ async function seed() {
   // Drop and recreate tables for a clean seed
   sqlite.exec(`
     DROP TABLE IF EXISTS video_watch_events;
+    DROP TABLE IF EXISTS lesson_comments;
     DROP TABLE IF EXISTS quiz_answers;
     DROP TABLE IF EXISTS quiz_attempts;
     DROP TABLE IF EXISTS quiz_options;
@@ -1594,6 +1595,70 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   console.log("Created video watch events.");
 
+  // ─── Lesson Comments ───
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course1LessonIds[0],
+      userId: students[0].id, // Emma
+      content:
+        "Great introduction! I finally understand why TypeScript is worth learning.",
+      createdAt: daysAgo(48),
+    })
+    .run();
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course1LessonIds[0],
+      userId: students[1].id, // James
+      content:
+        "The comparison between TypeScript and plain JavaScript was really helpful. Would love to see more examples of real-world type errors that TypeScript catches.",
+      createdAt: daysAgo(44),
+    })
+    .run();
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course1LessonIds[2],
+      userId: students[2].id, // Olivia
+      content:
+        "I got stuck on the tsconfig setup but figured it out. Make sure you have Node 18+ installed!",
+      createdAt: daysAgo(28),
+    })
+    .run();
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course1LessonIds[7],
+      userId: students[0].id, // Emma
+      content:
+        "Generics clicked for me after the identity function example. The constraint part with extends is really powerful.",
+      createdAt: daysAgo(25),
+    })
+    .run();
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course2LessonIds[0],
+      userId: students[0].id, // Emma
+      content:
+        "Coming from the TypeScript course, this is a nice change of pace. Looking forward to building an actual API!",
+      createdAt: daysAgo(38),
+    })
+    .run();
+
+  db.insert(schema.lessonComments)
+    .values({
+      lessonId: course2LessonIds[4],
+      userId: students[2].id, // Olivia
+      content:
+        "The Router pattern makes so much more sense now. I was putting all my routes in one file before.",
+      createdAt: daysAgo(22),
+    })
+    .run();
+
+  console.log("Created 6 lesson comments.");
+
   // ─── Purchases ───
   // Individual purchases for enrolled students
 
@@ -1736,6 +1801,7 @@ You've completed the Building REST APIs course. You now have the skills to build
   );
   console.log("  Quizzes: 3");
   console.log("  Enrollments: 7");
+  console.log("  Comments: 6");
   console.log("  Purchases: 6 (5 individual + 1 team)");
   console.log("  Teams: 1 (with 5 coupons)");
 }
