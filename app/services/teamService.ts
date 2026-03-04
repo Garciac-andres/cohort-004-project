@@ -59,3 +59,17 @@ export function getTeamMembers(teamId: number) {
     .where(eq(teamMembers.teamId, teamId))
     .all();
 }
+
+export function getTeamAdminIds(teamId: number): number[] {
+  return db
+    .select({ userId: teamMembers.userId })
+    .from(teamMembers)
+    .where(
+      and(
+        eq(teamMembers.teamId, teamId),
+        eq(teamMembers.role, TeamMemberRole.Admin)
+      )
+    )
+    .all()
+    .map((row) => row.userId);
+}
