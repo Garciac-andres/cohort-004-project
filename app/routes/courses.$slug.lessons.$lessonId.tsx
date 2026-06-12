@@ -27,6 +27,12 @@ import {
 } from "~/services/quizService";
 import { computeResult } from "~/services/quizScoringService";
 import {
+  awardXp,
+  isLastLessonInModule,
+  getModuleXpTotal,
+} from "~/services/xpService";
+import { XpSourceType } from "~/db/schema";
+import {
   createComment,
   listCommentsForLesson,
   softDeleteComment,
@@ -344,7 +350,22 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
-    return { success: true };
+    awardXp({
+      userId: currentUserId,
+      amount: 10,
+      sourceType: XpSourceType.LessonCompletion,
+      sourceId: lessonId,
+    });
+
+    const { isLast, moduleId } = isLastLessonInModule(lessonId);
+    let moduleCompletion: { moduleXp: number } | null = null;
+    if (isLast && moduleId) {
+      moduleCompletion = {
+        moduleXp: getModuleXpTotal({ userId: currentUserId, moduleId }),
+      };
+    }
+
+    return { success: true, moduleCompletion };
   }
 
   if (intent === "toggle-bookmark") {
@@ -376,6 +397,15 @@ export async function action({ params, request }: Route.ActionArgs) {
     const result = computeResult(currentUserId, quizId, selectedAnswers);
     if (!result) {
       throw data("Failed to score quiz", { status: 500 });
+    }
+
+    if (result.passed) {
+      awardXp({
+        userId: currentUserId,
+        amount: 5,
+        sourceType: XpSourceType.QuizPass,
+        sourceId: quizId,
+      });
     }
 
     return { quizResult: result };
@@ -491,6 +521,14 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
 
   const isCompleted =
     lessonStatus === LessonProgressStatus.Completed || justCompleted;
+
+  const moduleCompletion = fetcher.data?.moduleCompletion ?? null;
+
+  useEffect(() => {
+    if (moduleCompletion) {
+      toast.success(`Module complete! +${moduleCompletion.moduleXp} XP earned`);
+    }
+  }, [moduleCompletion]);
 
   // Navigate to next lesson after marking complete
   useEffect(() => {

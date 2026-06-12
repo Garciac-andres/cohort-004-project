@@ -1,12 +1,31 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
-import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
+import {
+  calculateProgress,
+  getCompletedLessonCount,
+  getTotalLessonCount,
+  getNextIncompleteLesson,
+} from "~/services/progressService";
 import { getCurrentUserId } from "~/lib/session";
-import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
+import { getTotalXp } from "~/services/xpService";
+import { getProgressToNextLevel } from "~/lib/gamification";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+} from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { AlertTriangle, BookOpen, CheckCircle2, GraduationCap, PlayCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  GraduationCap,
+  PlayCircle,
+  Star,
+} from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { data, isRouteErrorResponse } from "react-router";
 
@@ -59,7 +78,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completedCourses = coursesWithProgress.filter((c) => c.isCompleted);
   const inProgressCourses = coursesWithProgress.filter((c) => !c.isCompleted);
 
-  return { inProgressCourses, completedCourses };
+  const totalXp = getTotalXp(currentUserId);
+  const xpProgress = getProgressToNextLevel(totalXp);
+
+  return {
+    inProgressCourses,
+    completedCourses,
+    gamification: { totalXp, ...xpProgress },
+  };
 }
 
 function DashboardCardSkeleton() {
@@ -102,7 +128,7 @@ export function HydrateFallback() {
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
-  const { inProgressCourses, completedCourses } = loaderData;
+  const { inProgressCourses, completedCourses, gamification } = loaderData;
   const totalCourses = inProgressCourses.length + completedCourses.length;
 
   return (
@@ -123,6 +149,37 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
         </p>
       </div>
 
+      {/* XP & Level Summary */}
+      <Card className="mb-8">
+        <CardContent className="flex items-center gap-6 py-4">
+          <div className="flex size-12 items-center justify-center rounded-full bg-primary/10">
+            <Star className="size-6 text-primary" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-3">
+              <span className="text-lg font-bold">
+                Level {gamification.level}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {gamification.totalXp} XP total
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-3">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${gamification.progressPercent}%` }}
+                />
+              </div>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {gamification.currentLevelXp} / {gamification.xpForNextLevel} XP
+                to next level
+              </span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {totalCourses === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <GraduationCap className="mb-4 size-12 text-muted-foreground/50" />
@@ -142,8 +199,14 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
               <h2 className="mb-4 text-xl font-semibold">In Progress</h2>
               <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                 {inProgressCourses.map((course) => (
-                  <Card key={course.enrollmentId} className="flex flex-col overflow-hidden pt-0">
-                    <Link to={`/courses/${course.courseSlug}`} className="aspect-video overflow-hidden">
+                  <Card
+                    key={course.enrollmentId}
+                    className="flex flex-col overflow-hidden pt-0"
+                  >
+                    <Link
+                      to={`/courses/${course.courseSlug}`}
+                      className="aspect-video overflow-hidden"
+                    >
                       <CourseImage
                         src={course.coverImageUrl}
                         alt={course.courseTitle}
@@ -211,8 +274,14 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
               <h2 className="mb-4 text-xl font-semibold">Completed</h2>
               <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                 {completedCourses.map((course) => (
-                  <Card key={course.enrollmentId} className="flex flex-col overflow-hidden pt-0">
-                    <Link to={`/courses/${course.courseSlug}`} className="relative aspect-video overflow-hidden">
+                  <Card
+                    key={course.enrollmentId}
+                    className="flex flex-col overflow-hidden pt-0"
+                  >
+                    <Link
+                      to={`/courses/${course.courseSlug}`}
+                      className="relative aspect-video overflow-hidden"
+                    >
                       <CourseImage
                         src={course.coverImageUrl}
                         alt={course.courseTitle}
@@ -236,9 +305,7 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
                     <CardContent className="flex-1">
                       <div className="flex items-center gap-2 text-sm text-green-600">
                         <CheckCircle2 className="size-4" />
-                        <span>
-                          Completed — {course.totalLessons} lessons
-                        </span>
+                        <span>Completed — {course.totalLessons} lessons</span>
                       </div>
                     </CardContent>
                     <CardFooter>
@@ -270,7 +337,10 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   if (isRouteErrorResponse(error)) {
     if (error.status === 401) {
       title = "Sign in required";
-      message = typeof error.data === "string" ? error.data : "Please select a user from the DevUI panel.";
+      message =
+        typeof error.data === "string"
+          ? error.data
+          : "Please select a user from the DevUI panel.";
     } else {
       title = `Error ${error.status}`;
       message = typeof error.data === "string" ? error.data : error.statusText;

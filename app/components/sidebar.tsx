@@ -45,12 +45,20 @@ interface NotificationItem {
   createdAt: string;
 }
 
+interface GamificationData {
+  level: number;
+  currentLevelXp: number;
+  xpForNextLevel: number;
+  progressPercent: number;
+}
+
 interface SidebarProps {
   currentUser: CurrentUser | null;
   recentCourses?: RecentCourse[];
   isTeamAdmin?: boolean;
   notifications?: NotificationItem[];
   notificationUnreadCount?: number;
+  gamification?: GamificationData | null;
 }
 
 interface NavItem {
@@ -123,6 +131,7 @@ export function Sidebar({
   isTeamAdmin = false,
   notifications = [],
   notificationUnreadCount = 0,
+  gamification = null,
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
   const [isDark, setIsDark] = useState(false);
@@ -191,6 +200,25 @@ export function Sidebar({
           </NavLink>
         )}
       </nav>
+
+      {gamification && (
+        <div className="border-t border-sidebar-border p-3">
+          <div className="px-3">
+            <div className="mb-1 flex items-center justify-between text-sm">
+              <span className="font-semibold">Level {gamification.level}</span>
+              <span className="text-xs text-sidebar-foreground/50">
+                {gamification.currentLevelXp} / {gamification.xpForNextLevel} XP
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-sidebar-accent">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${gamification.progressPercent}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {recentCourses.length > 0 && (
         <div className="border-t border-sidebar-border p-3">
