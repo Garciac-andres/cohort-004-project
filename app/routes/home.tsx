@@ -4,10 +4,12 @@ import type { Route } from "./+types/home";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { buildCourseQuery, getLessonCountForCourse } from "~/services/courseService";
+import { getRatingSummariesForCourses } from "~/services/ratingService";
 import { getAllCategories } from "~/services/categoryService";
 import { CourseStatus } from "~/db/schema";
 import { BookOpen, GraduationCap, Users, ArrowRight, User, Moon, Sun } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
+import { StarRating } from "~/components/star-rating";
 import { DevUI } from "~/components/dev-ui";
 import { getAllUsers, getUserById } from "~/services/userService";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
@@ -22,9 +24,17 @@ export function meta({}: Route.MetaArgs) {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const courses = buildCourseQuery(null, null, CourseStatus.Published, "newest", 50, 0);
-  const featured = courses.slice(0, 3).map((course) => ({
+  const featuredCourses = courses.slice(0, 3);
+  const ratingSummaries = getRatingSummariesForCourses(
+    featuredCourses.map((c) => c.id)
+  );
+  const featured = featuredCourses.map((course) => ({
     ...course,
     lessonCount: getLessonCountForCourse(course.id),
+    ratingSummary: ratingSummaries.get(course.id) ?? {
+      average: null,
+      count: 0,
+    },
   }));
   const categories = getAllCategories();
   const users = getAllUsers();
@@ -186,6 +196,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     <p className="line-clamp-2 text-sm text-muted-foreground">
                       {course.description}
                     </p>
+                    {course.ratingSummary.average !== null && (
+                      <div className="mt-2">
+                        <StarRating
+                          value={course.ratingSummary.average}
+                          count={course.ratingSummary.count}
+                          showValue
+                          sizeClassName="size-3.5"
+                        />
+                      </div>
+                    )}
                   </CardContent>
                   <CardFooter className="flex items-center justify-between text-xs text-muted-foreground">
                     <span className="flex items-center gap-1">

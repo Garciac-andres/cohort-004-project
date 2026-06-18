@@ -1,4 +1,12 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  real,
+  uniqueIndex,
+  index,
+  type AnySQLiteColumn,
+} from "drizzle-orm/sqlite-core";
 
 export enum UserRole {
   Student = "student",
@@ -116,6 +124,58 @@ export const enrollments = sqliteTable("enrollments", {
   completedAt: text("completed_at"),
 });
 
+export const courseRatings = sqliteTable(
+  "course_ratings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    courseId: integer("course_id")
+      .notNull()
+      .references(() => courses.id),
+    // Star rating from 1 to 5 (no written reviews — star ratings only).
+    rating: integer("rating").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => ({
+    // One rating per student per course — re-rating updates the existing row.
+    userCourseUnique: uniqueIndex("course_ratings_user_course_unique").on(
+      table.userId,
+      table.courseId
+    ),
+  })
+);
+
+export const lessonBookmarks = sqliteTable(
+  "lesson_bookmarks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    lessonId: integer("lesson_id")
+      .notNull()
+      .references(() => lessons.id),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => ({
+    // Bookmarks are private to each student — one row per student per lesson.
+    // Toggling on/off inserts/deletes this row.
+    userLessonUnique: uniqueIndex("lesson_bookmarks_user_lesson_unique").on(
+      table.userId,
+      table.lessonId
+    ),
+  })
+);
+
 export const lessonProgress = sqliteTable("lesson_progress", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id")
@@ -127,6 +187,42 @@ export const lessonProgress = sqliteTable("lesson_progress", {
   status: text("status").notNull().$type<LessonProgressStatus>(),
   completedAt: text("completed_at"),
 });
+
+export const lessonComments = sqliteTable(
+  "lesson_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    lessonId: integer("lesson_id")
+      .notNull()
+      .references(() => lessons.id),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    // Null = top-level comment. Set = reply to that comment. Depth is capped at
+    // one level (a reply cannot itself be replied to); enforced in the service.
+    // For replies, lessonId is denormalized to match the parent so the whole
+    // thread loads with a single lessonId query.
+    parentId: integer("parent_id").references(
+      (): AnySQLiteColumn => lessonComments.id
+    ),
+    body: text("body").notNull(),
+    // Soft delete: when set, the comment is tombstoned — its body/author are
+    // scrubbed before reaching the client, but the row stays so replies remain
+    // anchored. Setting this must NOT bump updatedAt (see "edited" derivation).
+    deletedAt: text("deleted_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    // "Edited" is derived from updatedAt > createdAt, so only a body edit may
+    // bump this column.
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => ({
+    lessonIdx: index("lesson_comments_lesson_idx").on(table.lessonId),
+  })
+);
 
 export const quizzes = sqliteTable("quizzes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
