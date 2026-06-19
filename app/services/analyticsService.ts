@@ -173,9 +173,13 @@ export const ANALYTICS_TIMEZONE = "America/New_York";
 // A quiz-attempt heatmap bucketed by day-of-week (0 = Sunday … 6 = Saturday) and
 // hour-of-day (0–23) in `ANALYTICS_TIMEZONE`. `grid[day][hour]` is the attempt
 // count for that cell; `totalAttempts` is the number of attempts it is based on.
+// `timezone` carries the bucketing zone to the UI via loader data, so the client
+// component can label the chart without importing this server module (which would
+// leak `~/db` into the browser bundle — see memory `server-import-leak-into-client`).
 export type QuizTimingHeatmap = {
   grid: number[][]; // 7 rows (days) × 24 columns (hours)
   totalAttempts: number;
+  timezone: string;
 };
 
 // Map an `Intl` short weekday name to a 0 (Sunday) … 6 (Saturday) index.
@@ -238,7 +242,7 @@ export function getQuizTimingHeatmap(
     grid[day][hour]++;
   }
 
-  return { grid, totalAttempts: rows.length };
+  return { grid, totalAttempts: rows.length, timezone: ANALYTICS_TIMEZONE };
 }
 
 /**
