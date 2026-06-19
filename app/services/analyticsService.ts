@@ -108,6 +108,24 @@ export type CourseQuizDistribution = {
   buckets: QuizScoreBucket[]; // always the five buckets, in ascending order
 };
 
+// One row of the per-course master table: the headline figures for a course plus
+// its worst drop-off lesson. `completionPct` is official completions over enrolled
+// students (0–100); `reached100` counts enrollments that finished every lesson.
+// `worstDropLessonTitle` / `worstDropPct` describe the single largest consecutive
+// step-down in the completion funnel, or are both `null` when there is no funnel
+// to measure (fewer than two lessons, or no non-completing students).
+export type CourseTableRow = {
+  courseId: number;
+  courseTitle: string;
+  status: CourseStatus;
+  students: number; // distinct enrolled users
+  earnings: number; // cents
+  completionPct: number; // 0–100
+  reached100: number;
+  worstDropLessonTitle: string | null;
+  worstDropPct: number | null; // 0–100
+};
+
 // Days-ago cutoff as an ISO string, for comparing against stored ISO timestamps
 // (ISO 8601 sorts lexicographically, so a string `>=` is a chronological `>=`).
 function isoCutoff(now: Date, days: number): string {
@@ -734,4 +752,181 @@ export function getCourseQuizDistributions(
         best: entry.best[i],
       })),
     }));
+}
+
+// From a course's lessons in funnel order (module then lesson position) and the
+// size of the non-completing cohort, find the single worst drop-off: the lesson
+// with the largest step-down in completion from the lesson before it. Each
+// lesson's completion is `completedNonCompleters / cohortSize` (0–100); the funnel
+// descends as students abandon the course, and we flag the steepest consecutive
+// fall. Returns nulls when there is nothing to measure: fewer than two lessons, an
+// empty cohort (e.g. every enrolled student completed the course), or a funnel
+// that never actually descends.
+function worstDropoff(
+  lessons: { title: string; completedNonCompleters: number }[],
+  cohortSize: number
+): { lessonTitle: string | null; pct: number | null } {
+  if (cohortSize <= 0 || lessons.length < 2) {
+    return { lessonTitle: null, pct: null };
+  }
+
+  const pcts = lessons.map(
+    (lesson) => (lesson.completedNonCompleters / cohortSize) * 100
+  );
+
+  let worstPct = 0;
+  let worstTitle: string | null = null;
+  for (let i = 1; i < pcts.length; i++) {
+    const drop = pcts[i - 1] - pcts[i];
+    if (drop > worstPct) {
+      worstPct = drop;
+      worstTitle = lessons[i].title;
+    }
+  }
+
+  return worstTitle === null
+    ? { lessonTitle: null, pct: null }
+    : { lessonTitle: worstTitle, pct: worstPct };
+}
+
+/**
+ * One row per in-scope course for the dashboard's master table: title, status,
+ * distinct enrolled students, lifetime earnings (cents), official completion
+ * percentage, reached-100% count, and the worst drop-off lesson + its drop %.
+ *
+ * Everything is computed with set-based queries — no per-student loops — so it
+ * stays flat as enrollment grows:
+ *  - one grouped query over enrollments for students / official completions /
+ *    non-completer cohort size / reached-100% (correlated COUNT subqueries, as in
+ *    `getInstructorCompletion`);
+ *  - one grouped query over purchases for earnings;
+ *  - one query over lessons whose correlated subquery counts, per lesson, the
+ *    non-completing students who completed it (the completion funnel).
+ *
+ * The funnel rows arrive already ordered by module then lesson position; reducing
+ * them to the steepest consecutive drop (`worstDropoff`) is plain arithmetic.
+ * Courses with no enrollments/purchases/lessons still get a row (zeros and null
+ * drop-off); an empty array means there are no in-scope courses at all. Ordered by
+ * course id.
+ */
+export function getCourseTableRows(
+  instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER
+): CourseTableRow[] {
+  const courseRows = db
+    .select({
+      id: courses.id,
+      title: courses.title,
+      status: courses.status,
+    })
+    .from(courses)
+    .where(courseScope(instructorId, filter))
+    .orderBy(courses.id)
+    .all();
+
+  if (courseRows.length === 0) return [];
+
+  const totalLessons = sql<number>`(
+    select count(*) from ${lessons}
+    inner join ${modules} on ${lessons.moduleId} = ${modules.id}
+    where ${modules.courseId} = ${enrollments.courseId}
+  )`;
+  const completedLessons = sql<number>`(
+    select count(*) from ${lessonProgress}
+    inner join ${lessons} on ${lessonProgress.lessonId} = ${lessons.id}
+    inner join ${modules} on ${lessons.moduleId} = ${modules.id}
+    where ${modules.courseId} = ${enrollments.courseId}
+      and ${lessonProgress.userId} = ${enrollments.userId}
+      and ${lessonProgress.status} = ${LessonProgressStatus.Completed}
+  )`;
+
+  const enrollmentAgg = db
+    .select({
+      courseId: courses.id,
+      students: sql<number>`count(distinct ${enrollments.userId})`,
+      officialCompletions: sql<number>`coalesce(sum(case when ${enrollments.completedAt} is not null then 1 else 0 end), 0)`,
+      nonCompleters: sql<number>`coalesce(sum(case when ${enrollments.completedAt} is null then 1 else 0 end), 0)`,
+      reached100: sql<number>`coalesce(sum(case when ${totalLessons} > 0 and ${completedLessons} = ${totalLessons} then 1 else 0 end), 0)`,
+    })
+    .from(enrollments)
+    .innerJoin(courses, eq(enrollments.courseId, courses.id))
+    .where(courseScope(instructorId, filter))
+    .groupBy(courses.id)
+    .all();
+
+  const purchaseAgg = db
+    .select({
+      courseId: courses.id,
+      earnings: sql<number>`coalesce(sum(${purchases.pricePaid}), 0)`,
+    })
+    .from(purchases)
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .where(courseScope(instructorId, filter))
+    .groupBy(courses.id)
+    .all();
+
+  // Per-lesson completion among the non-completing cohort, in funnel order. The
+  // correlated subquery runs once per lesson (not per student), so this stays
+  // set-based as enrollment grows.
+  const lessonRows = db
+    .select({
+      courseId: courses.id,
+      title: lessons.title,
+      completedNonCompleters: sql<number>`(
+        select count(*) from ${lessonProgress}
+        inner join ${enrollments} on ${enrollments.userId} = ${lessonProgress.userId}
+        where ${lessonProgress.lessonId} = ${lessons.id}
+          and ${lessonProgress.status} = ${LessonProgressStatus.Completed}
+          and ${enrollments.courseId} = ${modules.courseId}
+          and ${enrollments.completedAt} is null
+      )`,
+    })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(courseScope(instructorId, filter))
+    .orderBy(courses.id, modules.position, lessons.position)
+    .all();
+
+  const enrollmentByCourse = new Map(
+    enrollmentAgg.map((row) => [row.courseId, row])
+  );
+  const earningsByCourse = new Map(
+    purchaseAgg.map((row) => [row.courseId, row.earnings])
+  );
+  const lessonsByCourse = new Map<
+    number,
+    { title: string; completedNonCompleters: number }[]
+  >();
+  for (const row of lessonRows) {
+    const list = lessonsByCourse.get(row.courseId) ?? [];
+    list.push({
+      title: row.title,
+      completedNonCompleters: row.completedNonCompleters,
+    });
+    lessonsByCourse.set(row.courseId, list);
+  }
+
+  return courseRows.map((course) => {
+    const agg = enrollmentByCourse.get(course.id);
+    const students = agg?.students ?? 0;
+    const officialCompletions = agg?.officialCompletions ?? 0;
+    const drop = worstDropoff(
+      lessonsByCourse.get(course.id) ?? [],
+      agg?.nonCompleters ?? 0
+    );
+
+    return {
+      courseId: course.id,
+      courseTitle: course.title,
+      status: course.status,
+      students,
+      earnings: earningsByCourse.get(course.id) ?? 0,
+      completionPct:
+        students > 0 ? (officialCompletions / students) * 100 : 0,
+      reached100: agg?.reached100 ?? 0,
+      worstDropLessonTitle: drop.lessonTitle,
+      worstDropPct: drop.pct,
+    };
+  });
 }

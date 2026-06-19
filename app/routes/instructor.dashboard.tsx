@@ -334,6 +334,18 @@ export default function InstructorDashboard({
       </div>
 
       <section className="mt-10">
+        <h2 className="text-xl font-semibold">Courses</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          One row per course — sort by the metric you care about. The worst
+          drop-off is the lesson where the most in-progress students stall.
+        </p>
+
+        <div className="mt-4">
+          <CourseTable rows={courseRows} />
+        </div>
+      </section>
+
+      <section className="mt-10">
         <h2 className="text-xl font-semibold">Quiz score distributions</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           First, last, and best attempt per student per quiz — to spot quizzes
