@@ -92,6 +92,22 @@ export type InstructorCompletion = {
   reached100: number; // enrollments whose completed lessons == course total lessons
 };
 
+// One histogram bucket of quiz scores, holding the count of (student, quiz)
+// pairs whose score falls in this range for each of the three series.
+export type QuizScoreBucket = {
+  range: string; // e.g. "0–59", "90–100" (percentages)
+  first: number; // earliest attempt
+  last: number; // most recent attempt
+  best: number; // highest attempt
+};
+
+export type CourseQuizDistribution = {
+  courseId: number;
+  courseTitle: string;
+  responseCount: number; // number of (student, quiz) pairs with at least one attempt
+  buckets: QuizScoreBucket[]; // always the five buckets, in ascending order
+};
+
 // Days-ago cutoff as an ISO string, for comparing against stored ISO timestamps
 // (ISO 8601 sorts lexicographically, so a string `>=` is a chronological `>=`).
 function isoCutoff(now: Date, days: number): string {
@@ -522,4 +538,123 @@ export function getInstructorAverageQuizScore(
     .get();
 
   return row?.average != null ? row.average * 100 : null;
+}
+
+// Score buckets (as percentages), ascending. Half-open on the low end so a score
+// sits in exactly one bucket: [0,60) [60,70) [70,80) [80,90) [90,100].
+const QUIZ_SCORE_BUCKETS = ["0–59", "60–69", "70–79", "80–89", "90–100"];
+
+// Map a 0–100 percentage to its bucket index.
+function quizBucketIndex(pct: number): number {
+  if (pct < 60) return 0;
+  if (pct < 70) return 1;
+  if (pct < 80) return 2;
+  if (pct < 90) return 3;
+  return 4;
+}
+
+// Reduce quiz attempts to one score per (student, quiz) for the in-scope courses,
+// keeping the course each pair belongs to. `mode` selects the reduction:
+//  - "best": the highest score, via `max(score)`.
+//  - "first" / "last": the score of the earliest / most recent attempt. These
+//    rely on SQLite's documented "bare column" behaviour — in an aggregate query
+//    with a single min()/max(), the non-aggregated columns are taken from the row
+//    that produced that min/max. So selecting a bare `score` alongside
+//    `min(attemptedAt)` yields the first attempt's score (and `max(attemptedAt)`
+//    the last). One grouped query, no per-student loops.
+function reducedQuizScores(
+  instructorId: number,
+  filter: DashboardFilter,
+  mode: "first" | "last" | "best"
+): { courseId: number; courseTitle: string; score: number }[] {
+  const score =
+    mode === "best"
+      ? sql<number>`max(${quizAttempts.score})`
+      : sql<number>`${quizAttempts.score}`;
+  // The min/max that drives "bare column" selection for first/last. For "best"
+  // the score column is already the aggregate, so any group-stable driver works.
+  const driver =
+    mode === "first"
+      ? sql`min(${quizAttempts.attemptedAt})`
+      : mode === "last"
+        ? sql`max(${quizAttempts.attemptedAt})`
+        : sql`count(*)`;
+
+  return db
+    .select({
+      courseId: courses.id,
+      courseTitle: courses.title,
+      score,
+      driver,
+    })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(courseScope(instructorId, filter))
+    .groupBy(courses.id, quizAttempts.quizId, quizAttempts.userId)
+    .all();
+}
+
+/**
+ * Per-course quiz-score distributions so an instructor can see which courses'
+ * quizzes are too hard or too easy. For every in-scope course (honouring the
+ * dashboard filter, down to a single course), three series — first attempt,
+ * last attempt, and best attempt — are each reduced to one value per student per
+ * quiz, then bucketed into 0–59 / 60–69 / 70–79 / 80–89 / 90–100 (scores are
+ * stored 0–1 and scaled to percentages). Only courses with at least one quiz
+ * attempt are returned, ordered by course id; an empty array means there is no
+ * quiz data in scope (the UI shows an empty state). The reduction happens in SQL
+ * (`reducedQuizScores`); bucketing the already-reduced rows is plain arithmetic.
+ */
+export function getCourseQuizDistributions(
+  instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER
+): CourseQuizDistribution[] {
+  type Tally = {
+    courseTitle: string;
+    first: number[];
+    last: number[];
+    best: number[];
+  };
+  const byCourse = new Map<number, Tally>();
+
+  const tally = (
+    rows: { courseId: number; courseTitle: string; score: number }[],
+    series: "first" | "last" | "best"
+  ) => {
+    for (const row of rows) {
+      let entry = byCourse.get(row.courseId);
+      if (!entry) {
+        entry = {
+          courseTitle: row.courseTitle,
+          first: [0, 0, 0, 0, 0],
+          last: [0, 0, 0, 0, 0],
+          best: [0, 0, 0, 0, 0],
+        };
+        byCourse.set(row.courseId, entry);
+      }
+      entry[series][quizBucketIndex(row.score * 100)]++;
+    }
+  };
+
+  tally(reducedQuizScores(instructorId, filter, "first"), "first");
+  tally(reducedQuizScores(instructorId, filter, "last"), "last");
+  tally(reducedQuizScores(instructorId, filter, "best"), "best");
+
+  return [...byCourse.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([courseId, entry]) => ({
+      courseId,
+      courseTitle: entry.courseTitle,
+      // Each "best" row is exactly one (student, quiz) pair.
+      responseCount: entry.best.reduce((sum, n) => sum + n, 0),
+      buckets: QUIZ_SCORE_BUCKETS.map((range, i) => ({
+        range,
+        first: entry.first[i],
+        last: entry.last[i],
+        best: entry.best[i],
+      })),
+    }));
 }
