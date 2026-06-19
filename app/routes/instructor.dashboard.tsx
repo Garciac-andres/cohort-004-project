@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
-import { getCoursesByInstructor } from "~/services/courseService";
+import {
+  getCoursesByInstructor,
+  getAllCourses,
+} from "~/services/courseService";
 import {
   getInstructorEarnings,
   getInstructorStudents,
@@ -95,20 +98,28 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const filter = parseFilter(new URL(request.url));
 
-  // All of the instructor's courses (every status) populate the course selector,
-  // independent of the active filter.
-  const courses = getCoursesByInstructor(currentUserId).map((course) => ({
-    id: course.id,
-    title: course.title,
-  }));
+  // Admins oversee the whole platform, so they see every instructor's data: a
+  // `null` scope drops the per-instructor restriction across all the aggregates.
+  // Instructors stay scoped to their own courses.
+  const isAdmin = user.role === UserRole.Admin;
+  const scopeId = isAdmin ? null : currentUserId;
 
-  const earnings = getInstructorEarnings(currentUserId, filter);
-  const students = getInstructorStudents(currentUserId, filter);
-  const completion = getInstructorCompletion(currentUserId, filter);
-  const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
-  const quizDistributions = getCourseQuizDistributions(currentUserId, filter);
-  const quizTimingHeatmap = getQuizTimingHeatmap(currentUserId, filter);
-  const courseRows = getCourseTableRows(currentUserId, filter);
+  // Populate the course selector (every status, independent of the active
+  // filter): all courses for an admin, just the instructor's own otherwise.
+  const courses = (isAdmin ? getAllCourses() : getCoursesByInstructor(currentUserId)).map(
+    (course) => ({
+      id: course.id,
+      title: course.title,
+    })
+  );
+
+  const earnings = getInstructorEarnings(scopeId, filter);
+  const students = getInstructorStudents(scopeId, filter);
+  const completion = getInstructorCompletion(scopeId, filter);
+  const averageQuizScore = getInstructorAverageQuizScore(scopeId, filter);
+  const quizDistributions = getCourseQuizDistributions(scopeId, filter);
+  const quizTimingHeatmap = getQuizTimingHeatmap(scopeId, filter);
+  const courseRows = getCourseTableRows(scopeId, filter);
 
   return {
     earnings,
@@ -120,6 +131,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     courseRows,
     courses,
     filter,
+    isAdmin,
   };
 }
 
@@ -189,6 +201,7 @@ export default function InstructorDashboard({
     courseRows,
     courses,
     filter,
+    isAdmin,
   } = loaderData;
 
   return (
@@ -204,7 +217,9 @@ export default function InstructorDashboard({
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Executive Dashboard</h1>
         <p className="mt-1 text-muted-foreground">
-          Performance across all your courses
+          {isAdmin
+            ? "Performance across every course on the platform"
+            : "Performance across all your courses"}
         </p>
       </div>
 

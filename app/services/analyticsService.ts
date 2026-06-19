@@ -150,13 +150,15 @@ export const ALL_COURSES_FILTER: DashboardFilter = {
   courseId: null,
 };
 
-// Course-scoping predicate shared by every dashboard aggregate: always limits to
-// the instructor's own courses, then narrows by the selected statuses (empty =
-// all) and an optional single course. Returns a drizzle condition for a
-// `.where(...)` over a query that joins `courses`.
-function courseScope(instructorId: number, filter: DashboardFilter) {
+// Course-scoping predicate shared by every dashboard aggregate. Normally limits
+// to one instructor's own courses, then narrows by the selected statuses (empty =
+// all) and an optional single course. Passing `instructorId === null` drops the
+// instructor restriction entirely — the platform-wide view used by admins, who
+// own no courses themselves but oversee everyone's. Returns a drizzle condition
+// for a `.where(...)` over a query that joins `courses`.
+function courseScope(instructorId: number | null, filter: DashboardFilter) {
   return and(
-    eq(courses.instructorId, instructorId),
+    instructorId != null ? eq(courses.instructorId, instructorId) : undefined,
     filter.statuses.length > 0
       ? inArray(courses.status, filter.statuses)
       : undefined,
@@ -220,7 +222,7 @@ function zonedDayHour(iso: string): { day: number; hour: number } {
  * there are no in-scope attempts, so the UI can show an empty state.
  */
 export function getQuizTimingHeatmap(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER
 ): QuizTimingHeatmap {
   const rows = db
@@ -482,7 +484,7 @@ export function getQuizPerformanceData(courseId: number): QuizPerformance[] {
  * in tests. One SQL aggregate with conditional sums — no per-student loops.
  */
 export function getInstructorEarnings(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER,
   now: Date = new Date()
 ): InstructorEarnings {
@@ -538,7 +540,7 @@ export function getInstructorEarnings(
  * — no per-student loops. Returns zeros when the instructor has no enrollments.
  */
 export function getInstructorStudents(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER,
   now: Date = new Date()
 ): InstructorStudents {
@@ -580,7 +582,7 @@ export function getInstructorStudents(
  * Returns zeros when the instructor has no enrollments.
  */
 export function getInstructorCompletion(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER
 ): InstructorCompletion {
   const totalLessons = sql<number>`(
@@ -623,7 +625,7 @@ export function getInstructorCompletion(
  * the card can show `—` rather than a misleading 0.
  */
 export function getInstructorAverageQuizScore(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER
 ): number | null {
   const row = db
@@ -662,7 +664,7 @@ function quizBucketIndex(pct: number): number {
 //    `min(attemptedAt)` yields the first attempt's score (and `max(attemptedAt)`
 //    the last). One grouped query, no per-student loops.
 function reducedQuizScores(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter,
   mode: "first" | "last" | "best"
 ): { courseId: number; courseTitle: string; score: number }[] {
@@ -708,7 +710,7 @@ function reducedQuizScores(
  * (`reducedQuizScores`); bucketing the already-reduced rows is plain arithmetic.
  */
 export function getCourseQuizDistributions(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER
 ): CourseQuizDistribution[] {
   type Tally = {
@@ -814,7 +816,7 @@ function worstDropoff(
  * course id.
  */
 export function getCourseTableRows(
-  instructorId: number,
+  instructorId: number | null,
   filter: DashboardFilter = ALL_COURSES_FILTER
 ): CourseTableRow[] {
   const courseRows = db
