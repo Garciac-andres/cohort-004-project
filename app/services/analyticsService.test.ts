@@ -23,6 +23,8 @@ import {
   getInstructorCompletion,
   getInstructorAverageQuizScore,
   getCourseQuizDistributions,
+  getQuizTimingHeatmap,
+  ANALYTICS_TIMEZONE,
   ALL_COURSES_FILTER,
 } from "./analyticsService";
 
@@ -1167,6 +1169,122 @@ describe("analyticsService", () => {
       // `empty` has no quizzes/attempts, so it is omitted.
       expect(dists.map((d) => d.courseId)).toEqual([base.course.id, course2.id]);
       expect(dists.every((d) => d.courseId !== empty.id)).toBe(true);
+    });
+  });
+
+  describe("getQuizTimingHeatmap", () => {
+    // Set up one quiz on base.course and return its id, for attaching attempts.
+    function seedQuiz(courseId: number) {
+      const m = makeModule({ courseId, position: 1 });
+      const lesson = makeLesson({ moduleId: m.id, position: 1 });
+      return makeQuiz({ lessonId: lesson.id }).id;
+    }
+
+    it("uses America/New_York as the single analytics timezone", () => {
+      expect(ANALYTICS_TIMEZONE).toBe("America/New_York");
+    });
+
+    it("returns an all-zero 7x24 grid when there are no in-scope attempts", () => {
+      const heatmap = getQuizTimingHeatmap(base.instructor.id);
+      expect(heatmap.totalAttempts).toBe(0);
+      expect(heatmap.grid).toHaveLength(7);
+      expect(heatmap.grid.every((row) => row.length === 24)).toBe(true);
+      expect(heatmap.grid.flat().every((count) => count === 0)).toBe(true);
+    });
+
+    it("buckets timestamps by day/hour in the fixed timezone, DST-aware and across the date boundary", () => {
+      const quizId = seedQuiz(base.course.id);
+      const student = makeStudent("s@example.com");
+
+      // 2026-06-15 02:00 UTC → in EDT (UTC-4, summer) this is 2026-06-14 22:00,
+      // i.e. the *previous* calendar day: Sunday (day 0), hour 22.
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-06-15T02:00:00.000Z",
+      });
+      // 2026-07-01 12:00 UTC → inside DST (EDT, UTC-4) → 08:00 Wednesday (day 3).
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
+      // 2026-01-15 12:00 UTC → outside DST (EST, UTC-5) → 07:00 Thursday (day 4).
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-01-15T12:00:00.000Z",
+      });
+
+      const { grid, totalAttempts } = getQuizTimingHeatmap(base.instructor.id);
+      expect(totalAttempts).toBe(3);
+      expect(grid[0][22]).toBe(1); // Sunday 22:00 (date-boundary crossing)
+      expect(grid[3][8]).toBe(1); // Wednesday 08:00 (EDT, DST)
+      expect(grid[4][7]).toBe(1); // Thursday 07:00 (EST, no DST)
+      // Every other cell is empty.
+      expect(grid.flat().reduce((sum, n) => sum + n, 0)).toBe(3);
+    });
+
+    it("aggregates across the instructor's courses but re-scopes to one course via the filter", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const quiz1 = seedQuiz(base.course.id);
+      const quiz2 = seedQuiz(course2.id);
+      const student = makeStudent("s@example.com");
+
+      // Both attempts land on the same cell so scoping is the only difference:
+      // 2026-07-01 12:00 UTC → Wednesday (day 3) 08:00 EDT.
+      makeAttempt({
+        userId: student.id,
+        quizId: quiz1,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
+      makeAttempt({
+        userId: student.id,
+        quizId: quiz2,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
+
+      // Default: aggregate across both courses.
+      const all = getQuizTimingHeatmap(base.instructor.id);
+      expect(all.totalAttempts).toBe(2);
+      expect(all.grid[3][8]).toBe(2);
+
+      // Filtered to a single course: only that course's attempt counts.
+      const onlyCourse2 = getQuizTimingHeatmap(base.instructor.id, {
+        statuses: [],
+        courseId: course2.id,
+      });
+      expect(onlyCourse2.totalAttempts).toBe(1);
+      expect(onlyCourse2.grid[3][8]).toBe(1);
+    });
+
+    it("excludes attempts on other instructors' courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const otherQuiz = seedQuiz(otherCourse.id);
+      const student = makeStudent("s@example.com");
+      makeAttempt({
+        userId: student.id,
+        quizId: otherQuiz,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
+
+      expect(getQuizTimingHeatmap(base.instructor.id).totalAttempts).toBe(0);
     });
   });
 });

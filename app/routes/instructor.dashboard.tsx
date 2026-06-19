@@ -17,6 +17,7 @@ import {
   getInstructorCompletion,
   getInstructorAverageQuizScore,
   getCourseQuizDistributions,
+  getQuizTimingHeatmap,
   type DashboardFilter,
 } from "~/services/analyticsService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -24,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { DashboardFilterBar } from "~/components/dashboard-filter-bar";
 import { QuizDistributionChart } from "~/components/quiz-distribution-chart";
+import { QuizTimingHeatmap } from "~/components/quiz-timing-heatmap";
 
 export function meta() {
   return [
@@ -103,6 +105,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completion = getInstructorCompletion(currentUserId, filter);
   const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
   const quizDistributions = getCourseQuizDistributions(currentUserId, filter);
+  const quizTimingHeatmap = getQuizTimingHeatmap(currentUserId, filter);
 
   return {
     earnings,
@@ -110,6 +113,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     completion,
     averageQuizScore,
     quizDistributions,
+    quizTimingHeatmap,
     courses,
     filter,
   };
@@ -177,6 +181,7 @@ export default function InstructorDashboard({
     completion,
     averageQuizScore,
     quizDistributions,
+    quizTimingHeatmap,
     courses,
     filter,
   } = loaderData;
@@ -359,6 +364,20 @@ export default function InstructorDashboard({
             ))}
           </div>
         )}
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-xl font-semibold">When students study</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Quiz attempts by day and hour, so you can see when your students are
+          most active.
+        </p>
+
+        <Card className="mt-4">
+          <CardContent className="pt-6">
+            <QuizTimingHeatmap heatmap={quizTimingHeatmap} />
+          </CardContent>
+        </Card>
       </section>
     </div>
   );
