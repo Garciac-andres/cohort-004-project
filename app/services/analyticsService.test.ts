@@ -1530,4 +1530,76 @@ describe("analyticsService", () => {
       expect(row.worstDropPct).toBe(75);
     });
   });
+
+  describe("platform-wide scope (instructorId = null)", () => {
+    // A null scope is the admin view: aggregates span every instructor's
+    // courses, not just one owner's.
+    const now = new Date("2026-06-19T00:00:00.000Z");
+
+    it("earnings span every instructor when scoped to null, but stay per-owner otherwise", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const buyer = makeStudent("buyer@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 1000,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+      makePurchase({
+        userId: buyer.id,
+        courseId: otherCourse.id,
+        pricePaid: 4000,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+
+      // Admin (null): both instructors' earnings.
+      expect(
+        getInstructorEarnings(null, ALL_COURSES_FILTER, now).allTime
+      ).toEqual({ earnings: 5000, paidPurchases: 2 });
+
+      // A single instructor still sees only their own.
+      expect(
+        getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now).allTime
+      ).toEqual({ earnings: 1000, paidPurchases: 1 });
+    });
+
+    it("the master table lists every instructor's courses when scoped to null", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+
+      const adminRows = getCourseTableRows(null);
+      expect(adminRows.map((r) => r.courseId).sort((a, b) => a - b)).toEqual(
+        [base.course.id, otherCourse.id].sort((a, b) => a - b)
+      );
+
+      // The owning instructor sees only their own course.
+      expect(getCourseTableRows(base.instructor.id).map((r) => r.courseId)).toEqual([
+        base.course.id,
+      ]);
+    });
+
+    it("the global filter still narrows a platform-wide view", () => {
+      const other = makeInstructor("other@example.com");
+      makeCourse({
+        slug: "other-draft",
+        instructorId: other.id,
+        status: schema.CourseStatus.Draft,
+      });
+
+      // base.course is Published; the other instructor's course is Draft. A null
+      // scope with a Published-only filter still excludes the draft.
+      const publishedOnly = getCourseTableRows(null, {
+        statuses: [schema.CourseStatus.Published],
+        courseId: null,
+      });
+      expect(publishedOnly.map((r) => r.courseId)).toEqual([base.course.id]);
+    });
+  });
 });
