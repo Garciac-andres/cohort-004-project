@@ -1,11 +1,18 @@
 import { Link, data, isRouteErrorResponse } from "react-router";
 import type { Route } from "./+types/instructor.dashboard";
-import { AlertTriangle, DollarSign, Receipt, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  DollarSign,
+  Receipt,
+  Users,
+} from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import {
   getInstructorEarnings,
   getInstructorStudents,
+  getInstructorCompletion,
 } from "~/services/analyticsService";
 import { UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -51,8 +58,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const earnings = getInstructorEarnings(currentUserId);
   const students = getInstructorStudents(currentUserId);
+  const completion = getInstructorCompletion(currentUserId);
 
-  return { earnings, students };
+  return { earnings, students, completion };
 }
 
 export function HydrateFallback() {
@@ -111,7 +119,7 @@ function StudentGrowthStat({
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { earnings, students } = loaderData;
+  const { earnings, students, completion } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -198,6 +206,36 @@ export default function InstructorDashboard({
                 label="Last 180 days"
                 newEnrollments={students.newLast180Days}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Completion
+            </CardTitle>
+            <CheckCircle2 className="size-4 shrink-0 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {formatCount(completion.officialCompletions)}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              officially completed
+            </div>
+
+            <div className="mt-6 border-t pt-4">
+              <div className="text-xs font-medium text-muted-foreground">
+                Reached 100% of lessons
+              </div>
+              <div className="mt-1 text-lg font-semibold">
+                {formatCount(completion.reached100)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {completion.reached100 === 1 ? "enrollment" : "enrollments"}{" "}
+                finished every lesson
+              </div>
             </div>
           </CardContent>
         </Card>

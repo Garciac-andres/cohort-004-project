@@ -20,6 +20,7 @@ import {
   getQuizPerformanceData,
   getInstructorEarnings,
   getInstructorStudents,
+  getInstructorCompletion,
 } from "./analyticsService";
 
 // ─── Seed helpers ───
@@ -83,6 +84,7 @@ function makeEnrollment(opts: {
   userId: number;
   courseId: number;
   enrolledAt?: string;
+  completedAt?: string;
 }) {
   return testDb
     .insert(schema.enrollments)
@@ -90,6 +92,7 @@ function makeEnrollment(opts: {
       userId: opts.userId,
       courseId: opts.courseId,
       ...(opts.enrolledAt ? { enrolledAt: opts.enrolledAt } : {}),
+      ...(opts.completedAt ? { completedAt: opts.completedAt } : {}),
     })
     .returning()
     .get();
@@ -798,6 +801,101 @@ describe("analyticsService", () => {
         newLast30Days: 1,
         newLast90Days: 1,
         newLast180Days: 1,
+      });
+    });
+  });
+
+  describe("getInstructorCompletion", () => {
+    it("returns zeros when the instructor has no enrollments", () => {
+      expect(getInstructorCompletion(base.instructor.id)).toEqual({
+        officialCompletions: 0,
+        reached100: 0,
+      });
+    });
+
+    it("counts enrollments with a completion timestamp as official completions", () => {
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+      makeEnrollment({
+        userId: s1.id,
+        courseId: base.course.id,
+        completedAt: "2026-06-01T00:00:00.000Z",
+      });
+      // Enrolled but never officially completed.
+      makeEnrollment({ userId: s2.id, courseId: base.course.id });
+
+      expect(getInstructorCompletion(base.instructor.id).officialCompletions).toBe(1);
+    });
+
+    it("counts an enrollment as reached-100% when completed lessons equal total lessons", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const l1 = makeLesson({ moduleId: m1.id, position: 1 });
+      const l2 = makeLesson({ moduleId: m1.id, position: 2 });
+      const finisher = makeStudent("finisher@example.com");
+      const partial = makeStudent("partial@example.com");
+
+      makeEnrollment({ userId: finisher.id, courseId: base.course.id });
+      makeEnrollment({ userId: partial.id, courseId: base.course.id });
+
+      // finisher completed both lessons; partial completed only one.
+      completeLesson({ userId: finisher.id, lessonId: l1.id });
+      completeLesson({ userId: finisher.id, lessonId: l2.id });
+      completeLesson({ userId: partial.id, lessonId: l1.id });
+
+      expect(getInstructorCompletion(base.instructor.id).reached100).toBe(1);
+    });
+
+    it("computes official and reached-100% independently when the two disagree", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const l1 = makeLesson({ moduleId: m1.id, position: 1 });
+      const l2 = makeLesson({ moduleId: m1.id, position: 2 });
+
+      // Marked complete but only finished one of two lessons (official, not 100%).
+      const marked = makeStudent("marked@example.com");
+      makeEnrollment({
+        userId: marked.id,
+        courseId: base.course.id,
+        completedAt: "2026-06-01T00:00:00.000Z",
+      });
+      completeLesson({ userId: marked.id, lessonId: l1.id });
+
+      // Finished every lesson but was never officially marked (100%, not official).
+      const finisher = makeStudent("finisher@example.com");
+      makeEnrollment({ userId: finisher.id, courseId: base.course.id });
+      completeLesson({ userId: finisher.id, lessonId: l1.id });
+      completeLesson({ userId: finisher.id, lessonId: l2.id });
+
+      expect(getInstructorCompletion(base.instructor.id)).toEqual({
+        officialCompletions: 1,
+        reached100: 1,
+      });
+    });
+
+    it("excludes courses with no lessons from reached-100%", () => {
+      // base.course has no lessons; a completed-lesson count of 0 must not be
+      // treated as having reached 100%.
+      const s1 = makeStudent("s1@example.com");
+      makeEnrollment({ userId: s1.id, courseId: base.course.id });
+
+      expect(getInstructorCompletion(base.instructor.id).reached100).toBe(0);
+    });
+
+    it("scopes counts to the instructor's own courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const theirs = makeStudent("theirs@example.com");
+      makeEnrollment({
+        userId: theirs.id,
+        courseId: otherCourse.id,
+        completedAt: "2026-06-01T00:00:00.000Z",
+      });
+
+      expect(getInstructorCompletion(base.instructor.id)).toEqual({
+        officialCompletions: 0,
+        reached100: 0,
       });
     });
   });

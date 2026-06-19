@@ -83,6 +83,11 @@ export type InstructorStudents = {
   newLast180Days: number;
 };
 
+export type InstructorCompletion = {
+  officialCompletions: number; // enrollments with a completion timestamp
+  reached100: number; // enrollments whose completed lessons == course total lessons
+};
+
 // Days-ago cutoff as an ISO string, for comparing against stored ISO timestamps
 // (ISO 8601 sorts lexicographically, so a string `>=` is a chronological `>=`).
 function isoCutoff(now: Date, days: number): string {
@@ -406,5 +411,52 @@ export function getInstructorStudents(
     newLast30Days: row?.new30 ?? 0,
     newLast90Days: row?.new90 ?? 0,
     newLast180Days: row?.new180 ?? 0,
+  };
+}
+
+/**
+ * Course-completion counts across all of an instructor's courses, reported two
+ * ways so the gap between them is visible:
+ *  - `officialCompletions`: enrollments with a `completedAt` timestamp set — the
+ *    student was formally marked complete.
+ *  - `reached100`: enrollments whose count of completed lessons equals the
+ *    course's total lesson count — the student finished every lesson, whether or
+ *    not the enrollment was ever officially marked complete.
+ * Both are current-state (not windowed) and computed independently in one SQL
+ * pass. `reached100` uses correlated COUNT subqueries per enrollment row, never
+ * the per-student progress calc, to avoid N+1. Courses with zero lessons are
+ * excluded from `reached100` (0 completed == 0 total is not a real completion).
+ * Returns zeros when the instructor has no enrollments.
+ */
+export function getInstructorCompletion(
+  instructorId: number
+): InstructorCompletion {
+  const totalLessons = sql<number>`(
+    select count(*) from ${lessons}
+    inner join ${modules} on ${lessons.moduleId} = ${modules.id}
+    where ${modules.courseId} = ${enrollments.courseId}
+  )`;
+  const completedLessons = sql<number>`(
+    select count(*) from ${lessonProgress}
+    inner join ${lessons} on ${lessonProgress.lessonId} = ${lessons.id}
+    inner join ${modules} on ${lessons.moduleId} = ${modules.id}
+    where ${modules.courseId} = ${enrollments.courseId}
+      and ${lessonProgress.userId} = ${enrollments.userId}
+      and ${lessonProgress.status} = ${LessonProgressStatus.Completed}
+  )`;
+
+  const row = db
+    .select({
+      officialCompletions: sql<number>`coalesce(sum(case when ${enrollments.completedAt} is not null then 1 else 0 end), 0)`,
+      reached100: sql<number>`coalesce(sum(case when ${totalLessons} > 0 and ${completedLessons} = ${totalLessons} then 1 else 0 end), 0)`,
+    })
+    .from(enrollments)
+    .innerJoin(courses, eq(enrollments.courseId, courses.id))
+    .where(eq(courses.instructorId, instructorId))
+    .get();
+
+  return {
+    officialCompletions: row?.officialCompletions ?? 0,
+    reached100: row?.reached100 ?? 0,
   };
 }
