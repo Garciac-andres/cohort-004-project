@@ -17,6 +17,7 @@ import {
   getInstructorCompletion,
   getInstructorAverageQuizScore,
   getCourseQuizDistributions,
+  getCourseTableRows,
   type DashboardFilter,
 } from "~/services/analyticsService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -24,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { DashboardFilterBar } from "~/components/dashboard-filter-bar";
 import { QuizDistributionChart } from "~/components/quiz-distribution-chart";
+import { CourseTable } from "~/components/course-table";
 
 export function meta() {
   return [
@@ -103,6 +105,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completion = getInstructorCompletion(currentUserId, filter);
   const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
   const quizDistributions = getCourseQuizDistributions(currentUserId, filter);
+  const courseRows = getCourseTableRows(currentUserId, filter);
 
   return {
     earnings,
@@ -110,6 +113,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     completion,
     averageQuizScore,
     quizDistributions,
+    courseRows,
     courses,
     filter,
   };
@@ -177,6 +181,7 @@ export default function InstructorDashboard({
     completion,
     averageQuizScore,
     quizDistributions,
+    courseRows,
     courses,
     filter,
   } = loaderData;
@@ -327,6 +332,18 @@ export default function InstructorDashboard({
           </CardContent>
         </Card>
       </div>
+
+      <section className="mt-10">
+        <h2 className="text-xl font-semibold">Courses</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          One row per course — sort by the metric you care about. The worst
+          drop-off is the lesson where the most in-progress students stall.
+        </p>
+
+        <div className="mt-4">
+          <CourseTable rows={courseRows} />
+        </div>
+      </section>
 
       <section className="mt-10">
         <h2 className="text-xl font-semibold">Quiz score distributions</h2>
