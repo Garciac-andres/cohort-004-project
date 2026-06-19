@@ -4,19 +4,24 @@ import {
   AlertTriangle,
   CheckCircle2,
   DollarSign,
+  GraduationCap,
   Receipt,
   Users,
 } from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
+import { getCoursesByInstructor } from "~/services/courseService";
 import {
   getInstructorEarnings,
   getInstructorStudents,
   getInstructorCompletion,
+  getInstructorAverageQuizScore,
+  type DashboardFilter,
 } from "~/services/analyticsService";
-import { UserRole } from "~/db/schema";
+import { CourseStatus, UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
+import { DashboardFilterBar } from "~/components/dashboard-filter-bar";
 
 export function meta() {
   return [
@@ -38,6 +43,32 @@ function formatCount(n: number) {
   return n.toLocaleString("en-US");
 }
 
+const VALID_STATUSES = Object.values(CourseStatus);
+
+// Read the global filter from the URL query string. `status` is a comma list of
+// course statuses (absent = all); `course` is a single course id (absent or
+// "all" = all courses). Unknown values are ignored so a hand-edited URL can't
+// throw. An empty `statuses` array means "all" (no narrowing) downstream.
+function parseFilter(url: URL): DashboardFilter {
+  const statusParam = url.searchParams.get("status");
+  const statuses = statusParam
+    ? statusParam
+        .split(",")
+        .filter((s): s is CourseStatus =>
+          VALID_STATUSES.includes(s as CourseStatus)
+        )
+    : [];
+
+  const courseParam = url.searchParams.get("course");
+  const courseId =
+    courseParam && courseParam !== "all" ? Number(courseParam) : null;
+
+  return {
+    statuses,
+    courseId: courseId != null && Number.isInteger(courseId) ? courseId : null,
+  };
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const currentUserId = await getCurrentUserId(request);
 
@@ -56,11 +87,21 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw data("Only instructors can access this page.", { status: 403 });
   }
 
-  const earnings = getInstructorEarnings(currentUserId);
-  const students = getInstructorStudents(currentUserId);
-  const completion = getInstructorCompletion(currentUserId);
+  const filter = parseFilter(new URL(request.url));
 
-  return { earnings, students, completion };
+  // All of the instructor's courses (every status) populate the course selector,
+  // independent of the active filter.
+  const courses = getCoursesByInstructor(currentUserId).map((course) => ({
+    id: course.id,
+    title: course.title,
+  }));
+
+  const earnings = getInstructorEarnings(currentUserId, filter);
+  const students = getInstructorStudents(currentUserId, filter);
+  const completion = getInstructorCompletion(currentUserId, filter);
+  const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
+
+  return { earnings, students, completion, averageQuizScore, courses, filter };
 }
 
 export function HydrateFallback() {
@@ -119,7 +160,8 @@ function StudentGrowthStat({
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { earnings, students, completion } = loaderData;
+  const { earnings, students, completion, averageQuizScore, courses, filter } =
+    loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -137,6 +179,12 @@ export default function InstructorDashboard({
           Performance across all your courses
         </p>
       </div>
+
+      <DashboardFilterBar
+        courses={courses}
+        statuses={filter.statuses}
+        courseId={filter.courseId}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Card className="sm:col-span-2 lg:col-span-1">
@@ -236,6 +284,27 @@ export default function InstructorDashboard({
                 {completion.reached100 === 1 ? "enrollment" : "enrollments"}{" "}
                 finished every lesson
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Average quiz score
+            </CardTitle>
+            <GraduationCap className="size-4 shrink-0 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {averageQuizScore === null
+                ? "—"
+                : `${Math.round(averageQuizScore)}%`}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {averageQuizScore === null
+                ? "no quiz attempts yet"
+                : "across all quiz attempts"}
             </div>
           </CardContent>
         </Card>

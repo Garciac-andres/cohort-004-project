@@ -21,6 +21,8 @@ import {
   getInstructorEarnings,
   getInstructorStudents,
   getInstructorCompletion,
+  getInstructorAverageQuizScore,
+  ALL_COURSES_FILTER,
 } from "./analyticsService";
 
 // ─── Seed helpers ───
@@ -519,7 +521,7 @@ describe("analyticsService", () => {
     const now = new Date("2026-06-19T00:00:00.000Z");
 
     it("returns zeroed windows when the instructor has no purchases", () => {
-      expect(getInstructorEarnings(base.instructor.id, now)).toEqual({
+      expect(getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now)).toEqual({
         allTime: { earnings: 0, paidPurchases: 0 },
         last30Days: { earnings: 0, paidPurchases: 0 },
         last90Days: { earnings: 0, paidPurchases: 0 },
@@ -558,7 +560,7 @@ describe("analyticsService", () => {
         createdAt: "2025-06-01T00:00:00.000Z",
       });
 
-      expect(getInstructorEarnings(base.instructor.id, now)).toEqual({
+      expect(getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now)).toEqual({
         allTime: { earnings: 15000, paidPurchases: 4 },
         last30Days: { earnings: 1000, paidPurchases: 1 },
         last90Days: { earnings: 3000, paidPurchases: 2 },
@@ -586,7 +588,7 @@ describe("analyticsService", () => {
         createdAt: justBefore,
       });
 
-      const earnings = getInstructorEarnings(base.instructor.id, now);
+      const earnings = getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now);
       // The boundary purchase counts in the 30-day window; the one a millisecond
       // earlier falls just outside it but still inside 90/180/all.
       expect(earnings.last30Days).toEqual({ earnings: 500, paidPurchases: 1 });
@@ -605,7 +607,7 @@ describe("analyticsService", () => {
       // Coupon/free/seeded enrollment: enrolled, but no purchase row.
       makeEnrollment({ userId: freeloader.id, courseId: base.course.id });
 
-      const earnings = getInstructorEarnings(base.instructor.id, now);
+      const earnings = getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now);
       expect(earnings.allTime).toEqual({ earnings: 2500, paidPurchases: 1 });
     });
 
@@ -629,7 +631,7 @@ describe("analyticsService", () => {
         createdAt: "2026-06-10T00:00:00.000Z",
       });
 
-      const earnings = getInstructorEarnings(base.instructor.id, now);
+      const earnings = getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now);
       expect(earnings.allTime).toEqual({ earnings: 1000, paidPurchases: 1 });
     });
 
@@ -646,7 +648,7 @@ describe("analyticsService", () => {
         createdAt: "2026-06-10T00:00:00.000Z",
       });
 
-      expect(getInstructorEarnings(base.instructor.id, now).allTime).toEqual({
+      expect(getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now).allTime).toEqual({
         earnings: 3000,
         paidPurchases: 1,
       });
@@ -658,7 +660,7 @@ describe("analyticsService", () => {
     const now = new Date("2026-06-19T00:00:00.000Z");
 
     it("returns zeros when the instructor has no enrollments", () => {
-      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+      expect(getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now)).toEqual({
         totalStudents: 0,
         newLast30Days: 0,
         newLast90Days: 0,
@@ -678,7 +680,7 @@ describe("analyticsService", () => {
       // Coupon/free/seeded enrollment: enrolled, but no purchase row.
       makeEnrollment({ userId: freeloader.id, courseId: base.course.id });
 
-      expect(getInstructorStudents(base.instructor.id, now).totalStudents).toBe(2);
+      expect(getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now).totalStudents).toBe(2);
     });
 
     it("counts each student once across multiple courses", () => {
@@ -691,7 +693,7 @@ describe("analyticsService", () => {
       makeEnrollment({ userId: s1.id, courseId: course2.id });
       makeEnrollment({ userId: s2.id, courseId: base.course.id });
 
-      expect(getInstructorStudents(base.instructor.id, now).totalStudents).toBe(2);
+      expect(getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now).totalStudents).toBe(2);
     });
 
     it("buckets new enrollments into the three nested windows", () => {
@@ -721,7 +723,7 @@ describe("analyticsService", () => {
         enrolledAt: "2025-06-01T00:00:00.000Z",
       });
 
-      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+      expect(getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now)).toEqual({
         totalStudents: 4,
         newLast30Days: 1,
         newLast90Days: 2,
@@ -748,7 +750,7 @@ describe("analyticsService", () => {
         enrolledAt: justBefore,
       });
 
-      const students = getInstructorStudents(base.instructor.id, now);
+      const students = getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now);
       // The boundary enrollment counts in the 30-day window; the one a millisecond
       // earlier falls just outside it but still inside 90/180.
       expect(students.newLast30Days).toBe(1);
@@ -770,7 +772,7 @@ describe("analyticsService", () => {
         enrolledAt: "2026-06-12T00:00:00.000Z",
       });
 
-      const students = getInstructorStudents(base.instructor.id, now);
+      const students = getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now);
       // One distinct student, but two new enrollments this month.
       expect(students.totalStudents).toBe(1);
       expect(students.newLast30Days).toBe(2);
@@ -796,7 +798,7 @@ describe("analyticsService", () => {
         enrolledAt: "2026-06-10T00:00:00.000Z",
       });
 
-      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+      expect(getInstructorStudents(base.instructor.id, ALL_COURSES_FILTER, now)).toEqual({
         totalStudents: 1,
         newLast30Days: 1,
         newLast90Days: 1,
@@ -897,6 +899,180 @@ describe("analyticsService", () => {
         officialCompletions: 0,
         reached100: 0,
       });
+    });
+  });
+
+  describe("getInstructorAverageQuizScore", () => {
+    it("returns null when the instructor has no quiz attempts", () => {
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeNull();
+    });
+
+    it("averages every attempt across the instructor's quizzes (0–100)", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const l1 = makeLesson({ moduleId: m1.id, position: 1 });
+      const l2 = makeLesson({ moduleId: m1.id, position: 2 });
+      const quizA = makeQuiz({ lessonId: l1.id, title: "Quiz A" });
+      const quizB = makeQuiz({ lessonId: l2.id, title: "Quiz B" });
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+
+      // Scores 0.8, 0.6, 1.0, 0.4 across two quizzes and two students → avg 0.7.
+      makeAttempt({ userId: s1.id, quizId: quizA.id, score: 0.8, passed: true });
+      makeAttempt({ userId: s2.id, quizId: quizA.id, score: 0.6, passed: false });
+      makeAttempt({ userId: s1.id, quizId: quizB.id, score: 1.0, passed: true });
+      makeAttempt({ userId: s2.id, quizId: quizB.id, score: 0.4, passed: false });
+
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeCloseTo(70);
+    });
+
+    it("excludes attempts on other instructors' courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const otherModule = makeModule({ courseId: otherCourse.id, position: 1 });
+      const otherLesson = makeLesson({ moduleId: otherModule.id, position: 1 });
+      const otherQuiz = makeQuiz({ lessonId: otherLesson.id, title: "Other Quiz" });
+
+      const mine = makeModule({ courseId: base.course.id, position: 1 });
+      const myLesson = makeLesson({ moduleId: mine.id, position: 1 });
+      const myQuiz = makeQuiz({ lessonId: myLesson.id, title: "My Quiz" });
+
+      const student = makeStudent("student@example.com");
+      makeAttempt({ userId: student.id, quizId: myQuiz.id, score: 0.5, passed: false });
+      // A perfect score on another instructor's quiz must not skew my average.
+      makeAttempt({ userId: student.id, quizId: otherQuiz.id, score: 1.0, passed: true });
+
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeCloseTo(50);
+    });
+  });
+
+  describe("dashboard filter scoping", () => {
+    // Fixed reference point for the windowed (earnings/students) aggregates.
+    const now = new Date("2026-06-19T00:00:00.000Z");
+    const recent = "2026-06-10T00:00:00.000Z";
+
+    it("earnings narrow to the selected course statuses", () => {
+      // base.course is Published; add a Draft course, each with one purchase.
+      const draft = makeCourse({
+        slug: "draft-course",
+        status: schema.CourseStatus.Draft,
+      });
+      const buyer = makeStudent("buyer@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 1000,
+        createdAt: recent,
+      });
+      makePurchase({
+        userId: buyer.id,
+        courseId: draft.id,
+        pricePaid: 5000,
+        createdAt: recent,
+      });
+
+      const publishedOnly = getInstructorEarnings(
+        base.instructor.id,
+        { statuses: [schema.CourseStatus.Published], courseId: null },
+        now
+      );
+      expect(publishedOnly.allTime).toEqual({ earnings: 1000, paidPurchases: 1 });
+
+      // No status narrowing → both courses count.
+      expect(
+        getInstructorEarnings(base.instructor.id, ALL_COURSES_FILTER, now).allTime
+      ).toEqual({ earnings: 6000, paidPurchases: 2 });
+    });
+
+    it("earnings narrow to a single selected course", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const buyer = makeStudent("buyer@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 1000,
+        createdAt: recent,
+      });
+      makePurchase({
+        userId: buyer.id,
+        courseId: course2.id,
+        pricePaid: 4000,
+        createdAt: recent,
+      });
+
+      const onlyCourse2 = getInstructorEarnings(
+        base.instructor.id,
+        { statuses: [], courseId: course2.id },
+        now
+      );
+      expect(onlyCourse2.allTime).toEqual({ earnings: 4000, paidPurchases: 1 });
+    });
+
+    it("students narrow to the selected course statuses", () => {
+      const draft = makeCourse({
+        slug: "draft-course",
+        status: schema.CourseStatus.Draft,
+      });
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+      makeEnrollment({ userId: s1.id, courseId: base.course.id, enrolledAt: recent });
+      makeEnrollment({ userId: s2.id, courseId: draft.id, enrolledAt: recent });
+
+      const publishedOnly = getInstructorStudents(
+        base.instructor.id,
+        { statuses: [schema.CourseStatus.Published], courseId: null },
+        now
+      );
+      expect(publishedOnly.totalStudents).toBe(1);
+      expect(publishedOnly.newLast30Days).toBe(1);
+    });
+
+    it("completion narrows to a single selected course", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+      makeEnrollment({
+        userId: s1.id,
+        courseId: base.course.id,
+        completedAt: "2026-06-01T00:00:00.000Z",
+      });
+      makeEnrollment({
+        userId: s2.id,
+        courseId: course2.id,
+        completedAt: "2026-06-01T00:00:00.000Z",
+      });
+
+      const onlyBase = getInstructorCompletion(base.instructor.id, {
+        statuses: [],
+        courseId: base.course.id,
+      });
+      expect(onlyBase.officialCompletions).toBe(1);
+    });
+
+    it("average quiz score narrows to the selected course statuses", () => {
+      const draft = makeCourse({
+        slug: "draft-course",
+        status: schema.CourseStatus.Draft,
+      });
+      const pubModule = makeModule({ courseId: base.course.id, position: 1 });
+      const pubLesson = makeLesson({ moduleId: pubModule.id, position: 1 });
+      const pubQuiz = makeQuiz({ lessonId: pubLesson.id, title: "Published Quiz" });
+      const draftModule = makeModule({ courseId: draft.id, position: 1 });
+      const draftLesson = makeLesson({ moduleId: draftModule.id, position: 1 });
+      const draftQuiz = makeQuiz({ lessonId: draftLesson.id, title: "Draft Quiz" });
+      const student = makeStudent("student@example.com");
+
+      makeAttempt({ userId: student.id, quizId: pubQuiz.id, score: 0.5, passed: false });
+      // A perfect score on the draft course must not skew the published-only view.
+      makeAttempt({ userId: student.id, quizId: draftQuiz.id, score: 1.0, passed: true });
+
+      const publishedOnly = getInstructorAverageQuizScore(base.instructor.id, {
+        statuses: [schema.CourseStatus.Published],
+        courseId: null,
+      });
+      expect(publishedOnly).toBeCloseTo(50);
     });
   });
 });
