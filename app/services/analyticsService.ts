@@ -460,3 +460,28 @@ export function getInstructorCompletion(
     reached100: row?.reached100 ?? 0,
   };
 }
+
+/**
+ * A single mastery number: the average quiz score (0–100) across every attempt
+ * on every quiz in the instructor's courses, joining attempts → quizzes →
+ * lessons → modules → courses. Scores are stored 0–1 and scaled to 0–100 here.
+ * Current-state, not windowed; weighted by attempt (a student with more attempts
+ * counts more), matching the per-quiz averages elsewhere. One SQL `avg`, no
+ * per-student loops. Returns `null` when the instructor has no quiz attempts, so
+ * the card can show `—` rather than a misleading 0.
+ */
+export function getInstructorAverageQuizScore(
+  instructorId: number
+): number | null {
+  const row = db
+    .select({ average: sql<number | null>`avg(${quizAttempts.score})` })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(eq(courses.instructorId, instructorId))
+    .get();
+
+  return row?.average != null ? row.average * 100 : null;
+}

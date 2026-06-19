@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   DollarSign,
+  GraduationCap,
   Receipt,
   Users,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import {
   getInstructorEarnings,
   getInstructorStudents,
   getInstructorCompletion,
+  getInstructorAverageQuizScore,
 } from "~/services/analyticsService";
 import { UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -59,8 +61,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const earnings = getInstructorEarnings(currentUserId);
   const students = getInstructorStudents(currentUserId);
   const completion = getInstructorCompletion(currentUserId);
+  const averageQuizScore = getInstructorAverageQuizScore(currentUserId);
 
-  return { earnings, students, completion };
+  return { earnings, students, completion, averageQuizScore };
 }
 
 export function HydrateFallback() {
@@ -119,7 +122,7 @@ function StudentGrowthStat({
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { earnings, students, completion } = loaderData;
+  const { earnings, students, completion, averageQuizScore } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -236,6 +239,27 @@ export default function InstructorDashboard({
                 {completion.reached100 === 1 ? "enrollment" : "enrollments"}{" "}
                 finished every lesson
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Average quiz score
+            </CardTitle>
+            <GraduationCap className="size-4 shrink-0 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {averageQuizScore === null
+                ? "—"
+                : `${Math.round(averageQuizScore)}%`}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {averageQuizScore === null
+                ? "no quiz attempts yet"
+                : "across all quiz attempts"}
             </div>
           </CardContent>
         </Card>

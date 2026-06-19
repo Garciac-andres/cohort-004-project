@@ -21,6 +21,7 @@ import {
   getInstructorEarnings,
   getInstructorStudents,
   getInstructorCompletion,
+  getInstructorAverageQuizScore,
 } from "./analyticsService";
 
 // ─── Seed helpers ───
@@ -897,6 +898,52 @@ describe("analyticsService", () => {
         officialCompletions: 0,
         reached100: 0,
       });
+    });
+  });
+
+  describe("getInstructorAverageQuizScore", () => {
+    it("returns null when the instructor has no quiz attempts", () => {
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeNull();
+    });
+
+    it("averages every attempt across the instructor's quizzes (0–100)", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const l1 = makeLesson({ moduleId: m1.id, position: 1 });
+      const l2 = makeLesson({ moduleId: m1.id, position: 2 });
+      const quizA = makeQuiz({ lessonId: l1.id, title: "Quiz A" });
+      const quizB = makeQuiz({ lessonId: l2.id, title: "Quiz B" });
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+
+      // Scores 0.8, 0.6, 1.0, 0.4 across two quizzes and two students → avg 0.7.
+      makeAttempt({ userId: s1.id, quizId: quizA.id, score: 0.8, passed: true });
+      makeAttempt({ userId: s2.id, quizId: quizA.id, score: 0.6, passed: false });
+      makeAttempt({ userId: s1.id, quizId: quizB.id, score: 1.0, passed: true });
+      makeAttempt({ userId: s2.id, quizId: quizB.id, score: 0.4, passed: false });
+
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeCloseTo(70);
+    });
+
+    it("excludes attempts on other instructors' courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const otherModule = makeModule({ courseId: otherCourse.id, position: 1 });
+      const otherLesson = makeLesson({ moduleId: otherModule.id, position: 1 });
+      const otherQuiz = makeQuiz({ lessonId: otherLesson.id, title: "Other Quiz" });
+
+      const mine = makeModule({ courseId: base.course.id, position: 1 });
+      const myLesson = makeLesson({ moduleId: mine.id, position: 1 });
+      const myQuiz = makeQuiz({ lessonId: myLesson.id, title: "My Quiz" });
+
+      const student = makeStudent("student@example.com");
+      makeAttempt({ userId: student.id, quizId: myQuiz.id, score: 0.5, passed: false });
+      // A perfect score on another instructor's quiz must not skew my average.
+      makeAttempt({ userId: student.id, quizId: otherQuiz.id, score: 1.0, passed: true });
+
+      expect(getInstructorAverageQuizScore(base.instructor.id)).toBeCloseTo(50);
     });
   });
 });
