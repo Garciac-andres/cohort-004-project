@@ -1,4 +1,4 @@
-import { eq, and, desc, gte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   purchases,
@@ -11,6 +11,7 @@ import {
   quizzes,
   quizAttempts,
   courseRatings,
+  CourseStatus,
   LessonProgressStatus,
 } from "~/db/schema";
 
@@ -29,6 +30,9 @@ import {
 // - The schema names differ from the PRD: comments live in `lessonComments`
 //   (soft-deleted rows excluded from engagement counts) and ratings in
 //   `courseRatings`.
+// - The executive-dashboard KPIs take a `DashboardFilter` (status set + course)
+//   so the whole page re-scopes together; it defaults to `ALL_COURSES_FILTER`
+//   (the instructor's entire portfolio) via the shared `courseScope` predicate.
 
 export type InstructorOverview = {
   totalRevenue: number; // cents
@@ -94,6 +98,36 @@ function isoCutoff(now: Date, days: number): string {
   const d = new Date(now);
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString();
+}
+
+// The global dashboard filter (GitHub #6). Re-scopes every KPI at once:
+// `statuses` narrows to a subset of course statuses (empty = all, no narrowing)
+// and `courseId` narrows to a single course (null = all). Threaded into every
+// aggregate so the whole page stays internally consistent.
+export type DashboardFilter = {
+  statuses: CourseStatus[];
+  courseId: number | null;
+};
+
+// The unfiltered default — all statuses, all courses. Used as the parameter
+// default so existing call sites (and tests) keep their whole-portfolio scope.
+export const ALL_COURSES_FILTER: DashboardFilter = {
+  statuses: [],
+  courseId: null,
+};
+
+// Course-scoping predicate shared by every dashboard aggregate: always limits to
+// the instructor's own courses, then narrows by the selected statuses (empty =
+// all) and an optional single course. Returns a drizzle condition for a
+// `.where(...)` over a query that joins `courses`.
+function courseScope(instructorId: number, filter: DashboardFilter) {
+  return and(
+    eq(courses.instructorId, instructorId),
+    filter.statuses.length > 0
+      ? inArray(courses.status, filter.statuses)
+      : undefined,
+    filter.courseId != null ? eq(courses.id, filter.courseId) : undefined
+  );
 }
 
 /**
@@ -334,6 +368,7 @@ export function getQuizPerformanceData(courseId: number): QuizPerformance[] {
  */
 export function getInstructorEarnings(
   instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER,
   now: Date = new Date()
 ): InstructorEarnings {
   const c30 = isoCutoff(now, 30);
@@ -358,7 +393,7 @@ export function getInstructorEarnings(
     })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(eq(courses.instructorId, instructorId))
+    .where(courseScope(instructorId, filter))
     .get();
 
   return {
@@ -389,6 +424,7 @@ export function getInstructorEarnings(
  */
 export function getInstructorStudents(
   instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER,
   now: Date = new Date()
 ): InstructorStudents {
   const newSince = (since: string) =>
@@ -403,7 +439,7 @@ export function getInstructorStudents(
     })
     .from(enrollments)
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
-    .where(eq(courses.instructorId, instructorId))
+    .where(courseScope(instructorId, filter))
     .get();
 
   return {
@@ -429,7 +465,8 @@ export function getInstructorStudents(
  * Returns zeros when the instructor has no enrollments.
  */
 export function getInstructorCompletion(
-  instructorId: number
+  instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER
 ): InstructorCompletion {
   const totalLessons = sql<number>`(
     select count(*) from ${lessons}
@@ -452,7 +489,7 @@ export function getInstructorCompletion(
     })
     .from(enrollments)
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
-    .where(eq(courses.instructorId, instructorId))
+    .where(courseScope(instructorId, filter))
     .get();
 
   return {
@@ -471,7 +508,8 @@ export function getInstructorCompletion(
  * the card can show `—` rather than a misleading 0.
  */
 export function getInstructorAverageQuizScore(
-  instructorId: number
+  instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER
 ): number | null {
   const row = db
     .select({ average: sql<number | null>`avg(${quizAttempts.score})` })
@@ -480,7 +518,7 @@ export function getInstructorAverageQuizScore(
     .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
     .innerJoin(courses, eq(modules.courseId, courses.id))
-    .where(eq(courses.instructorId, instructorId))
+    .where(courseScope(instructorId, filter))
     .get();
 
   return row?.average != null ? row.average * 100 : null;
