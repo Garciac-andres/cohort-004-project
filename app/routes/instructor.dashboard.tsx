@@ -18,6 +18,7 @@ import {
   getInstructorAverageQuizScore,
   getCourseQuizDistributions,
   getQuizTimingHeatmap,
+  getCourseTableRows,
   type DashboardFilter,
 } from "~/services/analyticsService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -26,6 +27,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { DashboardFilterBar } from "~/components/dashboard-filter-bar";
 import { QuizDistributionChart } from "~/components/quiz-distribution-chart";
 import { QuizTimingHeatmap } from "~/components/quiz-timing-heatmap";
+import { CourseTable } from "~/components/course-table";
 
 export function meta() {
   return [
@@ -106,6 +108,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
   const quizDistributions = getCourseQuizDistributions(currentUserId, filter);
   const quizTimingHeatmap = getQuizTimingHeatmap(currentUserId, filter);
+  const courseRows = getCourseTableRows(currentUserId, filter);
 
   return {
     earnings,
@@ -114,6 +117,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     averageQuizScore,
     quizDistributions,
     quizTimingHeatmap,
+    courseRows,
     courses,
     filter,
   };
@@ -182,6 +186,7 @@ export default function InstructorDashboard({
     averageQuizScore,
     quizDistributions,
     quizTimingHeatmap,
+    courseRows,
     courses,
     filter,
   } = loaderData;
