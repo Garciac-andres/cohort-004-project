@@ -76,6 +76,21 @@ export type InstructorEarnings = {
   last180Days: EarningsWindow;
 };
 
+export type InstructorStudents = {
+  totalStudents: number; // distinct enrolled users across the instructor's courses
+  newLast30Days: number; // new enrollments (rows) in each window
+  newLast90Days: number;
+  newLast180Days: number;
+};
+
+// Days-ago cutoff as an ISO string, for comparing against stored ISO timestamps
+// (ISO 8601 sorts lexicographically, so a string `>=` is a chronological `>=`).
+function isoCutoff(now: Date, days: number): string {
+  const d = new Date(now);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString();
+}
+
 /**
  * Headline metrics across all of an instructor's courses. `since` (ISO string)
  * filters revenue/sales (`purchases.createdAt`) and student counts
@@ -316,14 +331,9 @@ export function getInstructorEarnings(
   instructorId: number,
   now: Date = new Date()
 ): InstructorEarnings {
-  const cutoff = (days: number): string => {
-    const d = new Date(now);
-    d.setUTCDate(d.getUTCDate() - days);
-    return d.toISOString();
-  };
-  const c30 = cutoff(30);
-  const c90 = cutoff(90);
-  const c180 = cutoff(180);
+  const c30 = isoCutoff(now, 30);
+  const c90 = isoCutoff(now, 90);
+  const c180 = isoCutoff(now, 180);
 
   const earningsSince = (since: string) =>
     sql<number>`coalesce(sum(case when ${purchases.createdAt} >= ${since} then ${purchases.pricePaid} else 0 end), 0)`;
@@ -357,5 +367,44 @@ export function getInstructorEarnings(
       earnings: row?.earnings180 ?? 0,
       paidPurchases: row?.count180 ?? 0,
     },
+  };
+}
+
+/**
+ * Total reach and recent growth of an instructor's student base. `totalStudents`
+ * is the distinct count of enrolled users across all the instructor's courses
+ * (paid or not — free / coupon / seeded enrollments still represent reach, so
+ * there's no purchase filter). The three windows count *new enrollments* (rows,
+ * not distinct users) whose `enrolledAt` falls on or after the 30 / 90 / 180-day
+ * cutoff, so one student enrolling in two courses this month shows as two new
+ * enrollments. Cutoffs compare the stored ISO timestamp against a computed ISO
+ * cutoff (ISO 8601 sorts lexicographically). `now` is injectable so window
+ * boundaries are deterministic in tests. One SQL aggregate with conditional sums
+ * — no per-student loops. Returns zeros when the instructor has no enrollments.
+ */
+export function getInstructorStudents(
+  instructorId: number,
+  now: Date = new Date()
+): InstructorStudents {
+  const newSince = (since: string) =>
+    sql<number>`coalesce(sum(case when ${enrollments.enrolledAt} >= ${since} then 1 else 0 end), 0)`;
+
+  const row = db
+    .select({
+      totalStudents: sql<number>`count(distinct ${enrollments.userId})`,
+      new30: newSince(isoCutoff(now, 30)),
+      new90: newSince(isoCutoff(now, 90)),
+      new180: newSince(isoCutoff(now, 180)),
+    })
+    .from(enrollments)
+    .innerJoin(courses, eq(enrollments.courseId, courses.id))
+    .where(eq(courses.instructorId, instructorId))
+    .get();
+
+  return {
+    totalStudents: row?.totalStudents ?? 0,
+    newLast30Days: row?.new30 ?? 0,
+    newLast90Days: row?.new90 ?? 0,
+    newLast180Days: row?.new180 ?? 0,
   };
 }

@@ -19,6 +19,7 @@ import {
   getLessonDropoffData,
   getQuizPerformanceData,
   getInstructorEarnings,
+  getInstructorStudents,
 } from "./analyticsService";
 
 // ─── Seed helpers ───
@@ -645,6 +646,158 @@ describe("analyticsService", () => {
       expect(getInstructorEarnings(base.instructor.id, now).allTime).toEqual({
         earnings: 3000,
         paidPurchases: 1,
+      });
+    });
+  });
+
+  describe("getInstructorStudents", () => {
+    // Fixed reference point so the 30/90/180-day cutoffs are deterministic.
+    const now = new Date("2026-06-19T00:00:00.000Z");
+
+    it("returns zeros when the instructor has no enrollments", () => {
+      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+        totalStudents: 0,
+        newLast30Days: 0,
+        newLast90Days: 0,
+        newLast180Days: 0,
+      });
+    });
+
+    it("counts all enrollments regardless of a purchase", () => {
+      const buyer = makeStudent("buyer@example.com");
+      const freeloader = makeStudent("free@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 2500,
+      });
+      makeEnrollment({ userId: buyer.id, courseId: base.course.id });
+      // Coupon/free/seeded enrollment: enrolled, but no purchase row.
+      makeEnrollment({ userId: freeloader.id, courseId: base.course.id });
+
+      expect(getInstructorStudents(base.instructor.id, now).totalStudents).toBe(2);
+    });
+
+    it("counts each student once across multiple courses", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const s1 = makeStudent("s1@example.com");
+      const s2 = makeStudent("s2@example.com");
+
+      // s1 is enrolled in both courses but must count once toward total reach.
+      makeEnrollment({ userId: s1.id, courseId: base.course.id });
+      makeEnrollment({ userId: s1.id, courseId: course2.id });
+      makeEnrollment({ userId: s2.id, courseId: base.course.id });
+
+      expect(getInstructorStudents(base.instructor.id, now).totalStudents).toBe(2);
+    });
+
+    it("buckets new enrollments into the three nested windows", () => {
+      const s = ["a", "b", "c", "d"].map((n) => makeStudent(`${n}@example.com`));
+      // 9 days ago → counts in 30/90/180.
+      makeEnrollment({
+        userId: s[0].id,
+        courseId: base.course.id,
+        enrolledAt: "2026-06-10T00:00:00.000Z",
+      });
+      // ~65 days ago → counts in 90/180, not 30.
+      makeEnrollment({
+        userId: s[1].id,
+        courseId: base.course.id,
+        enrolledAt: "2026-04-15T00:00:00.000Z",
+      });
+      // ~155 days ago → counts in 180, not 30/90.
+      makeEnrollment({
+        userId: s[2].id,
+        courseId: base.course.id,
+        enrolledAt: "2026-01-15T00:00:00.000Z",
+      });
+      // Over a year ago → counts only toward the total.
+      makeEnrollment({
+        userId: s[3].id,
+        courseId: base.course.id,
+        enrolledAt: "2025-06-01T00:00:00.000Z",
+      });
+
+      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+        totalStudents: 4,
+        newLast30Days: 1,
+        newLast90Days: 2,
+        newLast180Days: 3,
+      });
+    });
+
+    it("treats the window cutoff as inclusive at the boundary", () => {
+      const onTime = makeStudent("ontime@example.com");
+      const justBeforeUser = makeStudent("before@example.com");
+      const cutoff30 = new Date(now);
+      cutoff30.setUTCDate(cutoff30.getUTCDate() - 30);
+      const onBoundary = cutoff30.toISOString();
+      const justBefore = new Date(cutoff30.getTime() - 1).toISOString();
+
+      makeEnrollment({
+        userId: onTime.id,
+        courseId: base.course.id,
+        enrolledAt: onBoundary,
+      });
+      makeEnrollment({
+        userId: justBeforeUser.id,
+        courseId: base.course.id,
+        enrolledAt: justBefore,
+      });
+
+      const students = getInstructorStudents(base.instructor.id, now);
+      // The boundary enrollment counts in the 30-day window; the one a millisecond
+      // earlier falls just outside it but still inside 90/180.
+      expect(students.newLast30Days).toBe(1);
+      expect(students.newLast90Days).toBe(2);
+    });
+
+    it("counts each enrollment, so one student enrolling twice counts twice", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const s1 = makeStudent("s1@example.com");
+
+      makeEnrollment({
+        userId: s1.id,
+        courseId: base.course.id,
+        enrolledAt: "2026-06-10T00:00:00.000Z",
+      });
+      makeEnrollment({
+        userId: s1.id,
+        courseId: course2.id,
+        enrolledAt: "2026-06-12T00:00:00.000Z",
+      });
+
+      const students = getInstructorStudents(base.instructor.id, now);
+      // One distinct student, but two new enrollments this month.
+      expect(students.totalStudents).toBe(1);
+      expect(students.newLast30Days).toBe(2);
+    });
+
+    it("scopes counts to the instructor's own courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const mine = makeStudent("mine@example.com");
+      const theirs = makeStudent("theirs@example.com");
+
+      makeEnrollment({
+        userId: mine.id,
+        courseId: base.course.id,
+        enrolledAt: "2026-06-10T00:00:00.000Z",
+      });
+      makeEnrollment({
+        userId: theirs.id,
+        courseId: otherCourse.id,
+        enrolledAt: "2026-06-10T00:00:00.000Z",
+      });
+
+      expect(getInstructorStudents(base.instructor.id, now)).toEqual({
+        totalStudents: 1,
+        newLast30Days: 1,
+        newLast90Days: 1,
+        newLast180Days: 1,
       });
     });
   });

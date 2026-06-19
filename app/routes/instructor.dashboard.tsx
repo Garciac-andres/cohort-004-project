@@ -1,9 +1,12 @@
 import { Link, data, isRouteErrorResponse } from "react-router";
 import type { Route } from "./+types/instructor.dashboard";
-import { AlertTriangle, DollarSign, Receipt } from "lucide-react";
+import { AlertTriangle, DollarSign, Receipt, Users } from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
-import { getInstructorEarnings } from "~/services/analyticsService";
+import {
+  getInstructorEarnings,
+  getInstructorStudents,
+} from "~/services/analyticsService";
 import { UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -47,8 +50,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const earnings = getInstructorEarnings(currentUserId);
+  const students = getInstructorStudents(currentUserId);
 
-  return { earnings };
+  return { earnings, students };
 }
 
 export function HydrateFallback() {
@@ -83,10 +87,31 @@ function EarningsWindowStat({
   );
 }
 
+// A single growth window (e.g. "Last 30 days") inside the Students card.
+function StudentGrowthStat({
+  label,
+  newEnrollments,
+}: {
+  label: string;
+  newEnrollments: number;
+}) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold">
+        +{formatCount(newEnrollments)}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        {newEnrollments === 1 ? "enrollment" : "enrollments"}
+      </div>
+    </div>
+  );
+}
+
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { earnings } = loaderData;
+  const { earnings, students } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -139,6 +164,39 @@ export default function InstructorDashboard({
                 label="Last 180 days"
                 earnings={earnings.last180Days.earnings}
                 paidPurchases={earnings.last180Days.paidPurchases}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Students
+            </CardTitle>
+            <Users className="size-4 shrink-0 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {formatCount(students.totalStudents)}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              enrolled {students.totalStudents === 1 ? "student" : "students"},
+              all-time
+            </div>
+
+            <div className="mt-6 grid grid-cols-3 gap-4 border-t pt-4">
+              <StudentGrowthStat
+                label="Last 30 days"
+                newEnrollments={students.newLast30Days}
+              />
+              <StudentGrowthStat
+                label="Last 90 days"
+                newEnrollments={students.newLast90Days}
+              />
+              <StudentGrowthStat
+                label="Last 180 days"
+                newEnrollments={students.newLast180Days}
               />
             </div>
           </CardContent>
