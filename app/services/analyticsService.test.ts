@@ -18,6 +18,7 @@ import {
   getCourseRevenueSummary,
   getLessonDropoffData,
   getQuizPerformanceData,
+  getInstructorEarnings,
 } from "./analyticsService";
 
 // ─── Seed helpers ───
@@ -38,7 +39,11 @@ function makeInstructor(email: string) {
     .get();
 }
 
-function makeCourse(opts: { slug: string; instructorId?: number }) {
+function makeCourse(opts: {
+  slug: string;
+  instructorId?: number;
+  status?: schema.CourseStatus;
+}) {
   return testDb
     .insert(schema.courses)
     .values({
@@ -47,7 +52,7 @@ function makeCourse(opts: { slug: string; instructorId?: number }) {
       description: "A course",
       instructorId: opts.instructorId ?? base.instructor.id,
       categoryId: base.category.id,
-      status: schema.CourseStatus.Published,
+      status: opts.status ?? schema.CourseStatus.Published,
     })
     .returning()
     .get();
@@ -502,6 +507,145 @@ describe("analyticsService", () => {
       const [perf] = getQuizPerformanceData(base.course.id);
       expect(perf.passRate).toBe(0);
       expect(perf.averageScore).toBe(0);
+    });
+  });
+
+  describe("getInstructorEarnings", () => {
+    // Fixed reference point so the 30/90/180-day cutoffs are deterministic.
+    const now = new Date("2026-06-19T00:00:00.000Z");
+
+    it("returns zeroed windows when the instructor has no purchases", () => {
+      expect(getInstructorEarnings(base.instructor.id, now)).toEqual({
+        allTime: { earnings: 0, paidPurchases: 0 },
+        last30Days: { earnings: 0, paidPurchases: 0 },
+        last90Days: { earnings: 0, paidPurchases: 0 },
+        last180Days: { earnings: 0, paidPurchases: 0 },
+      });
+    });
+
+    it("buckets purchases into the four nested windows", () => {
+      const buyer = makeStudent("buyer@example.com");
+      // 9 days ago → in all four windows.
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 1000,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+      // ~65 days ago → in 90/180/all, not 30.
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 2000,
+        createdAt: "2026-04-15T00:00:00.000Z",
+      });
+      // ~155 days ago → in 180/all, not 30/90.
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 4000,
+        createdAt: "2026-01-15T00:00:00.000Z",
+      });
+      // Over a year ago → all-time only.
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 8000,
+        createdAt: "2025-06-01T00:00:00.000Z",
+      });
+
+      expect(getInstructorEarnings(base.instructor.id, now)).toEqual({
+        allTime: { earnings: 15000, paidPurchases: 4 },
+        last30Days: { earnings: 1000, paidPurchases: 1 },
+        last90Days: { earnings: 3000, paidPurchases: 2 },
+        last180Days: { earnings: 7000, paidPurchases: 3 },
+      });
+    });
+
+    it("treats the window cutoff as inclusive at the boundary", () => {
+      const buyer = makeStudent("buyer@example.com");
+      const cutoff30 = new Date(now);
+      cutoff30.setUTCDate(cutoff30.getUTCDate() - 30);
+      const onBoundary = cutoff30.toISOString();
+      const justBefore = new Date(cutoff30.getTime() - 1).toISOString();
+
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 500,
+        createdAt: onBoundary,
+      });
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 700,
+        createdAt: justBefore,
+      });
+
+      const earnings = getInstructorEarnings(base.instructor.id, now);
+      // The boundary purchase counts in the 30-day window; the one a millisecond
+      // earlier falls just outside it but still inside 90/180/all.
+      expect(earnings.last30Days).toEqual({ earnings: 500, paidPurchases: 1 });
+      expect(earnings.last90Days).toEqual({ earnings: 1200, paidPurchases: 2 });
+    });
+
+    it("sums only purchases — enrollments without a purchase contribute nothing", () => {
+      const buyer = makeStudent("buyer@example.com");
+      const freeloader = makeStudent("free@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 2500,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+      // Coupon/free/seeded enrollment: enrolled, but no purchase row.
+      makeEnrollment({ userId: freeloader.id, courseId: base.course.id });
+
+      const earnings = getInstructorEarnings(base.instructor.id, now);
+      expect(earnings.allTime).toEqual({ earnings: 2500, paidPurchases: 1 });
+    });
+
+    it("scopes earnings to the instructor's own courses", () => {
+      const other = makeInstructor("other@example.com");
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const buyer = makeStudent("buyer@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: base.course.id,
+        pricePaid: 1000,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+      makePurchase({
+        userId: buyer.id,
+        courseId: otherCourse.id,
+        pricePaid: 9999,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+
+      const earnings = getInstructorEarnings(base.instructor.id, now);
+      expect(earnings.allTime).toEqual({ earnings: 1000, paidPurchases: 1 });
+    });
+
+    it("counts archived courses that earned money toward lifetime earnings", () => {
+      const archived = makeCourse({
+        slug: "archived-course",
+        status: schema.CourseStatus.Archived,
+      });
+      const buyer = makeStudent("buyer@example.com");
+      makePurchase({
+        userId: buyer.id,
+        courseId: archived.id,
+        pricePaid: 3000,
+        createdAt: "2026-06-10T00:00:00.000Z",
+      });
+
+      expect(getInstructorEarnings(base.instructor.id, now).allTime).toEqual({
+        earnings: 3000,
+        paidPurchases: 1,
+      });
     });
   });
 });

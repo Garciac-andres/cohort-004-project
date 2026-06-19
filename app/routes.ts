@@ -20,6 +20,7 @@ export default [
     ),
     route("instructor", "routes/instructor.tsx"),
     route("instructor/new", "routes/instructor.new.tsx"),
+    route("instructor/dashboard", "routes/instructor.dashboard.tsx"),
     route("instructor/analytics", "routes/instructor.analytics.tsx"),
     route(
       "instructor/analytics/courses",

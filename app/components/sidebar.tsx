@@ -109,7 +109,9 @@ export function Sidebar({
     currentUserRole === UserRole.Admin;
   const location = useLocation();
   // Keep the Dashboards group expanded whenever we're on one of its pages.
-  const onDashboards = location.pathname.startsWith("/instructor/analytics");
+  const onDashboards =
+    location.pathname.startsWith("/instructor/analytics") ||
+    location.pathname.startsWith("/instructor/dashboard");
   const [dashOpen, setDashOpen] = useState(onDashboards);
   const [isDark, setIsDark] = useState(false);
 
@@ -180,6 +182,11 @@ export function Sidebar({
             {dashOpen && (
               <div className="mt-1 space-y-1 pl-5">
                 {[
+                  {
+                    label: "Executive",
+                    to: "/instructor/dashboard",
+                    end: true,
+                  },
                   { label: "Overview", to: "/instructor/analytics", end: true },
                   { label: "By Course", to: "/instructor/analytics/courses" },
                 ].map((sub) => (

@@ -64,6 +64,18 @@ export type QuizPerformance = {
   averageScore: number; // 0–100
 };
 
+export type EarningsWindow = {
+  earnings: number; // cents
+  paidPurchases: number;
+};
+
+export type InstructorEarnings = {
+  allTime: EarningsWindow;
+  last30Days: EarningsWindow;
+  last90Days: EarningsWindow;
+  last180Days: EarningsWindow;
+};
+
 /**
  * Headline metrics across all of an instructor's courses. `since` (ISO string)
  * filters revenue/sales (`purchases.createdAt`) and student counts
@@ -286,4 +298,64 @@ export function getQuizPerformanceData(courseId: number): QuizPerformance[] {
     passRate: row.attempts > 0 ? (row.passedCount / row.attempts) * 100 : 0,
     averageScore: row.avgScore != null ? row.avgScore * 100 : 0,
   }));
+}
+
+/**
+ * Earnings (sum of `pricePaid`, cents) and the paid-purchase count behind them,
+ * across all of an instructor's courses, for four nested windows: all-time and
+ * the last 30 / 90 / 180 days. Earnings are drawn from the purchases log, so
+ * free / seeded / coupon-redeemed enrollments (which have no purchase row)
+ * contribute zero, and the paid-purchase count exposes the gap between enrolled
+ * students and paying customers. No course-status filter: archived courses that
+ * earned money still count toward lifetime earnings. Window cutoffs compare the
+ * stored ISO timestamp against a computed ISO cutoff (ISO 8601 sorts
+ * lexicographically). `now` is injectable so window boundaries are deterministic
+ * in tests. One SQL aggregate with conditional sums — no per-student loops.
+ */
+export function getInstructorEarnings(
+  instructorId: number,
+  now: Date = new Date()
+): InstructorEarnings {
+  const cutoff = (days: number): string => {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - days);
+    return d.toISOString();
+  };
+  const c30 = cutoff(30);
+  const c90 = cutoff(90);
+  const c180 = cutoff(180);
+
+  const earningsSince = (since: string) =>
+    sql<number>`coalesce(sum(case when ${purchases.createdAt} >= ${since} then ${purchases.pricePaid} else 0 end), 0)`;
+  const countSince = (since: string) =>
+    sql<number>`coalesce(sum(case when ${purchases.createdAt} >= ${since} then 1 else 0 end), 0)`;
+
+  const row = db
+    .select({
+      allEarnings: sql<number>`coalesce(sum(${purchases.pricePaid}), 0)`,
+      allCount: sql<number>`count(*)`,
+      earnings30: earningsSince(c30),
+      count30: countSince(c30),
+      earnings90: earningsSince(c90),
+      count90: countSince(c90),
+      earnings180: earningsSince(c180),
+      count180: countSince(c180),
+    })
+    .from(purchases)
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .where(eq(courses.instructorId, instructorId))
+    .get();
+
+  return {
+    allTime: {
+      earnings: row?.allEarnings ?? 0,
+      paidPurchases: row?.allCount ?? 0,
+    },
+    last30Days: { earnings: row?.earnings30 ?? 0, paidPurchases: row?.count30 ?? 0 },
+    last90Days: { earnings: row?.earnings90 ?? 0, paidPurchases: row?.count90 ?? 0 },
+    last180Days: {
+      earnings: row?.earnings180 ?? 0,
+      paidPurchases: row?.count180 ?? 0,
+    },
+  };
 }
