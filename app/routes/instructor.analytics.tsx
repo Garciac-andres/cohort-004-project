@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
-import { getCoursesByInstructor } from "~/services/courseService";
+import { getAllCourses, getCoursesByInstructor } from "~/services/courseService";
 import {
   getInstructorOverview,
   getRevenueTimeSeries,
@@ -92,9 +92,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   const range = parseRange(new URL(request.url).searchParams.get("range"));
   const since = sinceFor(range);
 
-  const overview = getInstructorOverview(currentUserId, since);
-  const timeSeries = getRevenueTimeSeries(currentUserId, since);
-  const hasCourses = getCoursesByInstructor(currentUserId).length > 0;
+  // Admins oversee the whole platform: a `null` scope aggregates every
+  // instructor's data. Instructors stay scoped to their own courses.
+  const isAdmin = user.role === UserRole.Admin;
+  const scopeId = isAdmin ? null : currentUserId;
+
+  const overview = getInstructorOverview(scopeId, since);
+  const timeSeries = getRevenueTimeSeries(scopeId, since);
+  const hasCourses = isAdmin
+    ? getAllCourses().length > 0
+    : getCoursesByInstructor(currentUserId).length > 0;
 
   return { overview, timeSeries, range, hasCourses };
 }

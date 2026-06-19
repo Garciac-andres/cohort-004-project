@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
-import { getCoursesByInstructor } from "~/services/courseService";
+import { getAllCourses, getCoursesByInstructor } from "~/services/courseService";
 import { getEnrollmentCountForCourse } from "~/services/enrollmentService";
 import { getCourseRevenueSummary } from "~/services/analyticsService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -58,8 +58,13 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   // All-time headline figures per course so the picker doubles as a quick
   // cross-course snapshot. The deep dive (range filter, drop-off, quizzes)
-  // lives on each course's own dashboard.
-  const courses = getCoursesByInstructor(currentUserId).map((course) => {
+  // lives on each course's own dashboard. Admins oversee every course;
+  // instructors see only their own.
+  const isAdmin = user.role === UserRole.Admin;
+  const ownCourses = isAdmin
+    ? getAllCourses()
+    : getCoursesByInstructor(currentUserId);
+  const courses = ownCourses.map((course) => {
     const revenue = getCourseRevenueSummary(course.id, null);
     return {
       id: course.id,

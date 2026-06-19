@@ -252,13 +252,17 @@ export function getQuizTimingHeatmap(
  * filters revenue/sales (`purchases.createdAt`) and student counts
  * (`enrollments.enrolledAt`); `null` means all time. Average rating is not
  * time-filtered (ratings are a cumulative satisfaction signal). Returns
- * zeros/nulls when the instructor has no matching data.
+ * zeros/nulls when the instructor has no matching data. Passing
+ * `instructorId === null` drops the instructor restriction for the
+ * platform-wide view used by admins.
  */
 export function getInstructorOverview(
-  instructorId: number,
+  instructorId: number | null,
   since: string | null
 ): InstructorOverview {
   const purchaseSince = since ? gte(purchases.createdAt, since) : undefined;
+  const byInstructor =
+    instructorId != null ? eq(courses.instructorId, instructorId) : undefined;
 
   const revenue = db
     .select({
@@ -267,7 +271,7 @@ export function getInstructorOverview(
     })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(eq(courses.instructorId, instructorId), purchaseSince))
+    .where(and(byInstructor, purchaseSince))
     .get();
 
   const students = db
@@ -278,7 +282,7 @@ export function getInstructorOverview(
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
     .where(
       and(
-        eq(courses.instructorId, instructorId),
+        byInstructor,
         since ? gte(enrollments.enrolledAt, since) : undefined
       )
     )
@@ -291,7 +295,7 @@ export function getInstructorOverview(
     })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(eq(courses.instructorId, instructorId), purchaseSince))
+    .where(and(byInstructor, purchaseSince))
     .groupBy(courses.id)
     .orderBy(desc(sql`sum(${purchases.pricePaid})`))
     .limit(1)
@@ -301,7 +305,7 @@ export function getInstructorOverview(
     .select({ average: sql<number | null>`avg(${courseRatings.rating})` })
     .from(courseRatings)
     .innerJoin(courses, eq(courseRatings.courseId, courses.id))
-    .where(eq(courses.instructorId, instructorId))
+    .where(byInstructor)
     .get();
 
   return {
@@ -316,10 +320,12 @@ export function getInstructorOverview(
 /**
  * Daily revenue points for the trend chart, scoped to the instructor's courses
  * and grouped by calendar day (UTC, via SQLite `date()`). Ordered ascending;
- * empty array when there are no purchases in range.
+ * empty array when there are no purchases in range. Passing
+ * `instructorId === null` drops the instructor restriction for the
+ * platform-wide view used by admins.
  */
 export function getRevenueTimeSeries(
-  instructorId: number,
+  instructorId: number | null,
   since: string | null
 ): RevenuePoint[] {
   return db
@@ -331,7 +337,9 @@ export function getRevenueTimeSeries(
     .innerJoin(courses, eq(purchases.courseId, courses.id))
     .where(
       and(
-        eq(courses.instructorId, instructorId),
+        instructorId != null
+          ? eq(courses.instructorId, instructorId)
+          : undefined,
         since ? gte(purchases.createdAt, since) : undefined
       )
     )

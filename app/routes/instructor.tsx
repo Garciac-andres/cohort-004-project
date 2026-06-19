@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor";
-import { getCoursesByInstructor, getLessonCountForCourse } from "~/services/courseService";
+import { getAllCourses, getCoursesByInstructor, getLessonCountForCourse } from "~/services/courseService";
 import { getEnrollmentCountForCourse } from "~/services/enrollmentService";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
@@ -30,13 +30,21 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const user = getUserById(currentUserId);
 
-  if (!user || user.role !== UserRole.Instructor) {
+  if (
+    !user ||
+    (user.role !== UserRole.Instructor && user.role !== UserRole.Admin)
+  ) {
     throw data("Only instructors can access this page.", {
       status: 403,
     });
   }
 
-  const instructorCourses = getCoursesByInstructor(currentUserId);
+  // Admins oversee the whole platform, so they see every course; instructors
+  // see only their own.
+  const isAdmin = user.role === UserRole.Admin;
+  const instructorCourses = isAdmin
+    ? getAllCourses()
+    : getCoursesByInstructor(currentUserId);
 
   const coursesWithStats = instructorCourses.map((course) => {
     const lessonCount = getLessonCountForCourse(course.id);

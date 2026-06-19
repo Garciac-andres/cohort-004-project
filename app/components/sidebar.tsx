@@ -69,7 +69,7 @@ const navItems: NavItem[] = [
     label: "My Courses",
     to: "/instructor",
     icon: <GraduationCap className="size-4" />,
-    roles: [UserRole.Instructor],
+    roles: [UserRole.Instructor, UserRole.Admin],
     end: true,
   },
   {
