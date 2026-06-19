@@ -25,12 +25,18 @@ import {
   getQuizWithQuestions,
   getBestAttempt,
 } from "~/services/quizService";
+import {
+  getBookmarkedLessonIds,
+  isLessonBookmarked,
+  toggleBookmark,
+} from "~/services/bookmarkService";
 import { computeResult } from "~/services/quizScoringService";
 import { LessonProgressStatus } from "~/db/schema";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import {
   AlertTriangle,
+  Bookmark,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -55,6 +61,15 @@ import { resolveCountry } from "~/lib/country.server";
 import { checkPppAccess, COUNTRIES } from "~/lib/ppp";
 import { findPurchase } from "~/services/purchaseService";
 import { parseFormData, parseParams } from "~/lib/validation";
+import {
+  getCommentsForLesson,
+  getCommentById,
+  createComment,
+  createReply,
+  updateComment,
+  softDeleteComment,
+} from "~/services/commentService";
+import { LessonComments } from "~/components/lesson-comments";
 
 const lessonParamsSchema = z.object({
   slug: z.string().min(1),
@@ -63,6 +78,20 @@ const lessonParamsSchema = z.object({
 
 const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
+});
+
+const commentBody = z.string().trim().min(1).max(5000);
+const createCommentSchema = z.object({ body: commentBody });
+const createReplySchema = z.object({
+  parentId: z.coerce.number().int(),
+  body: commentBody,
+});
+const editCommentSchema = z.object({
+  commentId: z.coerce.number().int(),
+  body: commentBody,
+});
+const deleteCommentSchema = z.object({
+  commentId: z.coerce.number().int(),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -138,6 +167,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let lastWatchPosition = 0;
   let watchProgress = 0;
   let lessonProgressMap: Record<number, string> = {};
+  let bookmarkedLessonIds: number[] = [];
+  let isBookmarked = false;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
@@ -156,6 +187,17 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       for (const record of progressRecords) {
         lessonProgressMap[record.lessonId] = record.status;
       }
+
+      // Bookmarks: this lesson's state (for the toggle) + all bookmarked
+      // lessons in the course (for the sidebar indicators).
+      bookmarkedLessonIds = getBookmarkedLessonIds({
+        userId: currentUserId,
+        courseId: course.id,
+      });
+      isBookmarked = isLessonBookmarked({
+        userId: currentUserId,
+        lessonId,
+      });
 
       // Get video watch state for resume and progress display
       if (lesson.videoUrl) {
@@ -248,11 +290,18 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
+  // Comments are part of the enrolled experience: only enrolled students and
+  // the course instructor may see them (and, separately, post — see action).
+  const isInstructor = currentUserId === course.instructorId;
+  const canComment = !!currentUserId && (enrolled || isInstructor);
+  const comments = enrolled || isInstructor ? getCommentsForLesson(lessonId) : [];
+
   return {
     course: {
       id: courseWithDetails.id,
       title: courseWithDetails.title,
       slug: courseWithDetails.slug,
+      instructorId: course.instructorId,
     },
     curriculum: courseWithDetails.modules.map((m) => ({
       id: m.id,
@@ -278,9 +327,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkedLessonIds,
+    isBookmarked,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    canComment,
   };
 }
 
@@ -303,6 +356,18 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
     return { success: true };
+  }
+
+  if (intent === "toggle-bookmark") {
+    // Bookmarking is part of the enrolled experience.
+    if (!isUserEnrolled(currentUserId, course.id)) {
+      throw data("You must be enrolled to bookmark lessons.", { status: 403 });
+    }
+    const { bookmarked } = toggleBookmark({
+      userId: currentUserId,
+      lessonId,
+    });
+    return { success: true, bookmarked };
   }
 
   if (intent === "submit-quiz") {
@@ -329,6 +394,74 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
 
     return { quizResult: result };
+  }
+
+  // ─── Comments ───
+  // Posting is limited to enrolled students and the course instructor. Edits
+  // are author-only; deletes are author-or-instructor (moderation).
+  const isInstructor = currentUserId === course.instructorId;
+
+  if (intent === "create-comment") {
+    if (!isUserEnrolled(currentUserId, course.id) && !isInstructor) {
+      throw data("You must be enrolled to comment.", { status: 403 });
+    }
+    const parsed = parseFormData(formData, createCommentSchema);
+    if (!parsed.success) {
+      return data({ errors: parsed.errors }, { status: 400 });
+    }
+    createComment(currentUserId, lessonId, parsed.data.body);
+    return { ok: true };
+  }
+
+  if (intent === "create-reply") {
+    if (!isUserEnrolled(currentUserId, course.id) && !isInstructor) {
+      throw data("You must be enrolled to comment.", { status: 403 });
+    }
+    const parsed = parseFormData(formData, createReplySchema);
+    if (!parsed.success) {
+      return data({ errors: parsed.errors }, { status: 400 });
+    }
+    try {
+      createReply(currentUserId, lessonId, parsed.data.parentId, parsed.data.body);
+    } catch {
+      // Structural failure (missing/deleted parent, depth or lesson mismatch).
+      throw data("Unable to reply to that comment.", { status: 400 });
+    }
+    return { ok: true };
+  }
+
+  if (intent === "edit-comment") {
+    const parsed = parseFormData(formData, editCommentSchema);
+    if (!parsed.success) {
+      return data({ errors: parsed.errors }, { status: 400 });
+    }
+    const comment = getCommentById(parsed.data.commentId);
+    if (!comment || comment.deletedAt !== null) {
+      throw data("Comment not found", { status: 404 });
+    }
+    // Only the author may edit their own words.
+    if (comment.userId !== currentUserId) {
+      throw data("You can only edit your own comment.", { status: 403 });
+    }
+    updateComment(comment.id, parsed.data.body);
+    return { ok: true };
+  }
+
+  if (intent === "delete-comment") {
+    const parsed = parseFormData(formData, deleteCommentSchema);
+    if (!parsed.success) {
+      return data({ errors: parsed.errors }, { status: 400 });
+    }
+    const comment = getCommentById(parsed.data.commentId);
+    if (!comment || comment.deletedAt !== null) {
+      throw data("Comment not found", { status: 404 });
+    }
+    // Author or the course instructor (moderation) may delete.
+    if (comment.userId !== currentUserId && !isInstructor) {
+      throw data("You can't delete this comment.", { status: 403 });
+    }
+    softDeleteComment(comment.id);
+    return { ok: true };
   }
 
   throw data("Invalid action", { status: 400 });
@@ -379,11 +512,26 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkedLessonIds,
+    isBookmarked,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    canComment,
   } = loaderData;
   const [autoplay, toggleAutoplay] = useAutoplay();
+  const bookmarkedLessonIdSet = new Set(bookmarkedLessonIds);
+  const bookmarkFetcher = useFetcher<{
+    success?: boolean;
+    bookmarked?: boolean;
+  }>({ key: `toggle-bookmark-${lesson.id}` });
+  // Optimistic state: while the toggle is in flight, flip immediately.
+  const isBookmarkPending = bookmarkFetcher.state !== "idle";
+  const optimisticBookmarked = isBookmarkPending
+    ? !isBookmarked
+    : (bookmarkFetcher.data?.bookmarked ?? isBookmarked);
+  const isInstructor = currentUserId === course.instructorId;
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
   const quizFetcher = useFetcher({ key: `quiz-${lesson.id}` });
   const navigate = useNavigate();
@@ -453,6 +601,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
         curriculum={curriculum}
         currentLessonId={lesson.id}
         lessonProgressMap={lessonProgressMap}
+        bookmarkedLessonIds={bookmarkedLessonIdSet}
         enrolled={enrolled}
       />
 
@@ -501,6 +650,28 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
                   Open Code
                 </Button>
               </a>
+            )}
+            {enrolled && currentUserId && (
+              <bookmarkFetcher.Form method="post">
+                <input type="hidden" name="intent" value="toggle-bookmark" />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="sm"
+                  disabled={isBookmarkPending}
+                  aria-pressed={optimisticBookmarked}
+                >
+                  <Bookmark
+                    className={cn(
+                      "mr-1.5 size-4",
+                      optimisticBookmarked
+                        ? "fill-amber-500 text-amber-500"
+                        : "text-muted-foreground"
+                    )}
+                  />
+                  {optimisticBookmarked ? "Bookmarked" : "Bookmark"}
+                </Button>
+              </bookmarkFetcher.Form>
             )}
           </div>
 
@@ -592,6 +763,16 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
             </div>
           )}
 
+          {/* Lesson comments — visible only to enrolled students + instructor */}
+          {(enrolled || isInstructor) && (
+            <LessonComments
+              comments={comments}
+              currentUserId={currentUserId}
+              instructorId={course.instructorId}
+              canComment={canComment}
+            />
+          )}
+
           {/* Prev/Next Navigation */}
           <div className="flex items-center justify-between border-t pt-6">
             {prevLesson ? (
@@ -650,6 +831,7 @@ function CurriculumSidebar({
   curriculum,
   currentLessonId,
   lessonProgressMap,
+  bookmarkedLessonIds,
   enrolled,
 }: {
   course: { id: number; title: string; slug: string };
@@ -660,6 +842,7 @@ function CurriculumSidebar({
   }>;
   currentLessonId: number;
   lessonProgressMap: Record<number, string>;
+  bookmarkedLessonIds: Set<number>;
   enrolled: boolean;
 }) {
   // Find which module the current lesson belongs to
@@ -701,6 +884,9 @@ function CurriculumSidebar({
         <nav className="flex-1 p-2">
           {curriculum.map((mod) => {
             const isExpanded = expandedModules.has(mod.id);
+            const moduleHasBookmark = mod.lessons.some((l) =>
+              bookmarkedLessonIds.has(l.id)
+            );
 
             return (
               <div key={mod.id} className="mb-1">
@@ -715,6 +901,9 @@ function CurriculumSidebar({
                     )}
                   />
                   <span className="flex-1 text-left">{mod.title}</span>
+                  {moduleHasBookmark && (
+                    <Bookmark className="size-3.5 shrink-0 fill-amber-500 text-amber-500" />
+                  )}
                 </button>
 
                 {isExpanded && (
@@ -726,6 +915,7 @@ function CurriculumSidebar({
                         status === LessonProgressStatus.Completed;
                       const isInProgress =
                         status === LessonProgressStatus.InProgress;
+                      const isBookmarked = bookmarkedLessonIds.has(l.id);
 
                       return (
                         <li key={l.id}>
@@ -749,7 +939,10 @@ function CurriculumSidebar({
                             ) : (
                               <Circle className="size-3.5 shrink-0" />
                             )}
-                            <span className="truncate">{l.title}</span>
+                            <span className="flex-1 truncate">{l.title}</span>
+                            {isBookmarked && (
+                              <Bookmark className="size-3.5 shrink-0 fill-amber-500 text-amber-500" />
+                            )}
                           </Link>
                         </li>
                       );

@@ -1,4 +1,4 @@
-import { NavLink, Form } from "react-router";
+import { NavLink, Form, useLocation } from "react-router";
 import { useState, useEffect } from "react";
 import { cn } from "~/lib/utils";
 import { UserRole } from "~/db/schema";
@@ -7,6 +7,8 @@ import {
   BookOpen,
   LayoutDashboard,
   GraduationCap,
+  BarChart3,
+  ChevronDown,
   Shield,
   Tag,
   Users,
@@ -45,6 +47,9 @@ interface NavItem {
   to: string;
   icon: React.ReactNode;
   roles: UserRole[] | "all";
+  // Exact match only — set when a deeper route (e.g. /instructor/analytics)
+  // would otherwise keep this parent link (/instructor) highlighted.
+  end?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -65,6 +70,7 @@ const navItems: NavItem[] = [
     to: "/instructor",
     icon: <GraduationCap className="size-4" />,
     roles: [UserRole.Instructor],
+    end: true,
   },
   {
     label: "Manage Users",
@@ -98,6 +104,15 @@ export function Sidebar({
   isTeamAdmin = false,
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
+  const canSeeDashboards =
+    currentUserRole === UserRole.Instructor ||
+    currentUserRole === UserRole.Admin;
+  const location = useLocation();
+  // Keep the Dashboards group expanded whenever we're on one of its pages.
+  const onDashboards =
+    location.pathname.startsWith("/instructor/analytics") ||
+    location.pathname.startsWith("/instructor/dashboard");
+  const [dashOpen, setDashOpen] = useState(onDashboards);
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -128,6 +143,7 @@ export function Sidebar({
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -141,6 +157,59 @@ export function Sidebar({
               {item.label}
             </NavLink>
           ))}
+        {canSeeDashboards && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setDashOpen((open) => !open)}
+              aria-expanded={dashOpen}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                onDashboards
+                  ? "text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              )}
+            >
+              <BarChart3 className="size-4" />
+              <span className="flex-1 text-left">Dashboards</span>
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform",
+                  dashOpen && "rotate-180"
+                )}
+              />
+            </button>
+            {dashOpen && (
+              <div className="mt-1 space-y-1 pl-5">
+                {[
+                  {
+                    label: "Executive",
+                    to: "/instructor/dashboard",
+                    end: true,
+                  },
+                  { label: "Overview", to: "/instructor/analytics", end: true },
+                  { label: "By Course", to: "/instructor/analytics/courses" },
+                ].map((sub) => (
+                  <NavLink
+                    key={sub.to}
+                    to={sub.to}
+                    end={sub.end}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors",
+                        isActive
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                      )
+                    }
+                  >
+                    {sub.label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {isTeamAdmin && (
           <NavLink
             to="/team"

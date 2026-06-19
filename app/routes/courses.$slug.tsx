@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router";
+import { z } from "zod";
+import { Link, useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug";
 import {
@@ -8,6 +9,15 @@ import {
   getLessonCountForCourse,
 } from "~/services/courseService";
 import { isUserEnrolled } from "~/services/enrollmentService";
+import {
+  getCourseRatingSummary,
+  getUserRatingForCourse,
+  setRating,
+  MIN_PROGRESS_TO_RATE,
+} from "~/services/ratingService";
+import { getBookmarkedLessonIds } from "~/services/bookmarkService";
+import { parseFormData } from "~/lib/validation";
+import { StarRating, InteractiveStarRating } from "~/components/star-rating";
 import {
   calculateProgress,
   getLessonProgressForCourse,
@@ -27,6 +37,7 @@ import {
 } from "~/components/ui/tabs";
 import {
   AlertTriangle,
+  Bookmark,
   BookOpen,
   CheckCircle2,
   Circle,
@@ -71,6 +82,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let progress = 0;
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
+  let bookmarkedLessonIds: number[] = [];
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
@@ -88,6 +100,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
       const nextLesson = getNextIncompleteLesson(currentUserId, course.id);
       nextLessonId = nextLesson?.id ?? null;
+
+      bookmarkedLessonIds = getBookmarkedLessonIds({
+        userId: currentUserId,
+        courseId: course.id,
+      });
     }
   }
 
@@ -102,6 +119,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     : courseWithDetails.price;
   const tierInfo = getCountryTierInfo(country);
 
+  // Ratings: the course average + this user's own rating (if any).
+  const ratingSummary = getCourseRatingSummary(course.id);
+  const userRating = currentUserId
+    ? (getUserRatingForCourse(currentUserId, course.id)?.rating ?? null)
+    : null;
+  const isInstructor = currentUserId === course.instructorId;
+  const canRate =
+    enrolled && !isInstructor && progress >= MIN_PROGRESS_TO_RATE;
+
   return {
     course: courseWithDetails,
     salesCopyHtml,
@@ -110,13 +136,59 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     progress,
     lessonProgressMap,
     nextLessonId,
+    bookmarkedLessonIds,
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    userRating,
+    canRate,
+    minProgressToRate: MIN_PROGRESS_TO_RATE,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+const rateSchema = z.object({
+  rating: z.coerce.number().int().min(1).max(5),
+});
+
+// Action handles star-rating submissions. Enrollment is still handled via the
+// purchase confirmation page (no enrollment action here).
+export async function action({ params, request }: Route.ActionArgs) {
+  const currentUserId = await getCurrentUserId(request);
+  if (!currentUserId) {
+    throw data("You must be signed in to rate a course.", { status: 401 });
+  }
+
+  const course = getCourseBySlug(params.slug);
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  // Only enrolled students who have made enough progress (and not the
+  // instructor) may rate the course.
+  if (currentUserId === course.instructorId) {
+    throw data("Instructors cannot rate their own course.", { status: 403 });
+  }
+  if (!isUserEnrolled(currentUserId, course.id)) {
+    throw data("You must be enrolled to rate this course.", { status: 403 });
+  }
+  const progress = calculateProgress(currentUserId, course.id, false, false);
+  if (progress < MIN_PROGRESS_TO_RATE) {
+    throw data(
+      `Complete at least ${MIN_PROGRESS_TO_RATE}% of the course before rating.`,
+      { status: 403 }
+    );
+  }
+
+  const formData = await request.formData();
+  const parsed = parseFormData(formData, rateSchema);
+  if (!parsed.success) {
+    return data({ errors: parsed.errors }, { status: 400 });
+  }
+
+  const saved = setRating(currentUserId, course.id, parsed.data.rating);
+  return { success: true, rating: saved.rating };
+}
 
 export function HydrateFallback() {
   return (
@@ -178,11 +250,17 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     progress,
     lessonProgressMap,
     nextLessonId,
+    bookmarkedLessonIds,
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    userRating,
+    canRate,
+    minProgressToRate,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
+  const bookmarkedLessonIdSet = new Set(bookmarkedLessonIds);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -301,7 +379,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
         <p className="mb-4 text-lg text-muted-foreground">
           {course.description}
         </p>
-        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <UserAvatar
               name={course.instructorName}
@@ -310,6 +388,13 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
             />
             {course.instructorName}
           </span>
+          {ratingSummary.average !== null && (
+            <StarRating
+              value={ratingSummary.average}
+              count={ratingSummary.count}
+              showValue
+            />
+          )}
           <span className="flex items-center gap-1">
             <BookOpen className="size-4" />
             {lessonCount} lessons
@@ -355,6 +440,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
               enrolled={enrolled}
               isInstructor={isInstructor}
               lessonProgressMap={lessonProgressMap}
+              bookmarkedLessonIds={bookmarkedLessonIdSet}
             />
           </div>
         </div>
@@ -442,6 +528,14 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                   </p>
                 )}
               </div>
+              <CourseRatingWidget
+                canRate={canRate}
+                userRating={userRating}
+                enrolled={enrolled}
+                isInstructor={isInstructor}
+                progress={progress}
+                minProgressToRate={minProgressToRate}
+              />
             </CardContent>
           </Card>
         </div>
@@ -455,6 +549,7 @@ function CourseContent({
   enrolled,
   isInstructor,
   lessonProgressMap,
+  bookmarkedLessonIds,
 }: {
   course: {
     id: number;
@@ -472,6 +567,7 @@ function CourseContent({
   enrolled: boolean;
   isInstructor: boolean;
   lessonProgressMap: Record<number, string>;
+  bookmarkedLessonIds: Set<number>;
 }) {
   return (
     <div>
@@ -482,16 +578,24 @@ function CourseContent({
         </p>
       ) : (
         <div className="space-y-4">
-          {course.modules.map((mod) => (
+          {course.modules.map((mod) => {
+            const moduleHasBookmark = mod.lessons.some((l) =>
+              bookmarkedLessonIds.has(l.id)
+            );
+
+            return (
             <Card key={mod.id}>
               <CardHeader>
-                <h3 className="font-semibold">
+                <h3 className="flex items-center gap-2 font-semibold">
                   <Link
                     to={`/courses/${course.slug}/${mod.id}`}
                     className="hover:underline"
                   >
                     {mod.title}
                   </Link>
+                  {moduleHasBookmark && (
+                    <Bookmark className="size-3.5 shrink-0 fill-amber-500 text-amber-500" />
+                  )}
                 </h3>
                 <p className="text-sm text-muted-foreground">
                   {mod.lessons.length} lessons
@@ -531,6 +635,8 @@ function CourseContent({
                       );
                     }
 
+                    const isBookmarked = bookmarkedLessonIds.has(lesson.id);
+
                     return (
                       <li key={lesson.id}>
                         {enrolled ? (
@@ -557,6 +663,9 @@ function CourseContent({
                                 )}
                               </span>
                             )}
+                            {isBookmarked && (
+                              <Bookmark className="size-4 shrink-0 fill-amber-500 text-amber-500" />
+                            )}
                           </Link>
                         ) : (
                           <div className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -581,8 +690,83 @@ function CourseContent({
                 </ul>
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
+      )}
+    </div>
+  );
+}
+
+function CourseRatingWidget({
+  canRate,
+  userRating,
+  enrolled,
+  isInstructor,
+  progress,
+  minProgressToRate,
+}: {
+  canRate: boolean;
+  userRating: number | null;
+  enrolled: boolean;
+  isInstructor: boolean;
+  progress: number;
+  minProgressToRate: number;
+}) {
+  const fetcher = useFetcher<{
+    success?: boolean;
+    rating?: number;
+    errors?: Record<string, string>;
+  }>();
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.success) {
+      toast.success("Thanks for rating this course!");
+    }
+    if (fetcher.state === "idle" && fetcher.data?.errors) {
+      toast.error("Couldn't save your rating. Please try again.");
+    }
+  }, [fetcher.state, fetcher.data]);
+
+  // Enrolled-but-not-yet-eligible students see why they can't rate yet.
+  if (!canRate) {
+    if (enrolled && !isInstructor) {
+      return (
+        <div className="border-t pt-4 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Rate this course</p>
+          <p className="mt-1 text-xs">
+            Reach {minProgressToRate}% progress to leave a rating
+            {progress > 0 ? ` (you're at ${progress}%)` : ""}.
+          </p>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // Optimistic value: show the in-flight selection immediately.
+  const pending = fetcher.formData?.get("rating");
+  const displayValue = pending ? Number(pending) : (userRating ?? 0);
+  const saving = fetcher.state !== "idle";
+
+  return (
+    <div className="border-t pt-4">
+      <p className="text-sm font-medium">
+        {userRating ? "Your rating" : "Rate this course"}
+      </p>
+      <div className="mt-2">
+        <InteractiveStarRating
+          value={displayValue}
+          disabled={saving}
+          onChange={(rating) =>
+            fetcher.submit({ rating: String(rating) }, { method: "post" })
+          }
+        />
+      </div>
+      {userRating && !saving && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Tap a star to change your rating.
+        </p>
       )}
     </div>
   );
