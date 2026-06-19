@@ -16,12 +16,14 @@ import {
   getInstructorStudents,
   getInstructorCompletion,
   getInstructorAverageQuizScore,
+  getCourseQuizDistributions,
   type DashboardFilter,
 } from "~/services/analyticsService";
 import { CourseStatus, UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { DashboardFilterBar } from "~/components/dashboard-filter-bar";
+import { QuizDistributionChart } from "~/components/quiz-distribution-chart";
 
 export function meta() {
   return [
@@ -100,8 +102,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   const students = getInstructorStudents(currentUserId, filter);
   const completion = getInstructorCompletion(currentUserId, filter);
   const averageQuizScore = getInstructorAverageQuizScore(currentUserId, filter);
+  const quizDistributions = getCourseQuizDistributions(currentUserId, filter);
 
-  return { earnings, students, completion, averageQuizScore, courses, filter };
+  return {
+    earnings,
+    students,
+    completion,
+    averageQuizScore,
+    quizDistributions,
+    courses,
+    filter,
+  };
 }
 
 export function HydrateFallback() {
@@ -160,8 +171,15 @@ function StudentGrowthStat({
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { earnings, students, completion, averageQuizScore, courses, filter } =
-    loaderData;
+  const {
+    earnings,
+    students,
+    completion,
+    averageQuizScore,
+    quizDistributions,
+    courses,
+    filter,
+  } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -309,6 +327,39 @@ export default function InstructorDashboard({
           </CardContent>
         </Card>
       </div>
+
+      <section className="mt-10">
+        <h2 className="text-xl font-semibold">Quiz score distributions</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          First, last, and best attempt per student per quiz — to spot quizzes
+          that are too hard or too easy.
+        </p>
+
+        {quizDistributions.length === 0 ? (
+          <Card className="mt-4">
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              No quiz data for the selected courses yet.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            {quizDistributions.map((dist) => (
+              <Card key={dist.courseId}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">{dist.courseTitle}</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    {formatCount(dist.responseCount)} quiz{" "}
+                    {dist.responseCount === 1 ? "response" : "responses"}
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <QuizDistributionChart buckets={dist.buckets} />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

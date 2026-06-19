@@ -22,6 +22,7 @@ import {
   getInstructorStudents,
   getInstructorCompletion,
   getInstructorAverageQuizScore,
+  getCourseQuizDistributions,
   ALL_COURSES_FILTER,
 } from "./analyticsService";
 
@@ -171,6 +172,7 @@ function makeAttempt(opts: {
   quizId: number;
   score: number;
   passed: boolean;
+  attemptedAt?: string;
 }) {
   return testDb
     .insert(schema.quizAttempts)
@@ -179,6 +181,7 @@ function makeAttempt(opts: {
       quizId: opts.quizId,
       score: opts.score,
       passed: opts.passed,
+      ...(opts.attemptedAt ? { attemptedAt: opts.attemptedAt } : {}),
     })
     .returning()
     .get();
@@ -1073,6 +1076,97 @@ describe("analyticsService", () => {
         courseId: null,
       });
       expect(publishedOnly).toBeCloseTo(50);
+    });
+  });
+
+  describe("getCourseQuizDistributions", () => {
+    it("returns an empty array when there is no quiz data in scope", () => {
+      expect(getCourseQuizDistributions(base.instructor.id)).toEqual([]);
+    });
+
+    it("reduces to first/last/best per student per quiz and buckets them", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const lesson = makeLesson({ moduleId: m1.id, position: 1 });
+      const quiz = makeQuiz({ lessonId: lesson.id, title: "Quiz A" });
+      const a = makeStudent("a@example.com");
+      const b = makeStudent("b@example.com");
+
+      // Student A: first 0.5 (→50, bucket 0), best 0.9 (→90, bucket 4),
+      // last 0.7 (→70, bucket 2).
+      makeAttempt({ userId: a.id, quizId: quiz.id, score: 0.5, passed: false, attemptedAt: "2026-01-01T00:00:00.000Z" });
+      makeAttempt({ userId: a.id, quizId: quiz.id, score: 0.9, passed: true, attemptedAt: "2026-01-02T00:00:00.000Z" });
+      makeAttempt({ userId: a.id, quizId: quiz.id, score: 0.7, passed: true, attemptedAt: "2026-01-03T00:00:00.000Z" });
+      // Student B: first 0.65 (→65, bucket 1), last 0.6 (→60, bucket 1),
+      // best 0.65 (bucket 1).
+      makeAttempt({ userId: b.id, quizId: quiz.id, score: 0.65, passed: false, attemptedAt: "2026-01-01T00:00:00.000Z" });
+      makeAttempt({ userId: b.id, quizId: quiz.id, score: 0.6, passed: false, attemptedAt: "2026-01-02T00:00:00.000Z" });
+
+      const [dist] = getCourseQuizDistributions(base.instructor.id);
+      expect(dist.courseId).toBe(base.course.id);
+      expect(dist.responseCount).toBe(2);
+      expect(dist.buckets.map((b) => b.range)).toEqual([
+        "0–59",
+        "60–69",
+        "70–79",
+        "80–89",
+        "90–100",
+      ]);
+      expect(dist.buckets.map((b) => b.first)).toEqual([1, 1, 0, 0, 0]);
+      expect(dist.buckets.map((b) => b.last)).toEqual([0, 1, 1, 0, 0]);
+      expect(dist.buckets.map((b) => b.best)).toEqual([0, 1, 0, 0, 1]);
+    });
+
+    it("places boundary scores in the expected buckets", () => {
+      const m1 = makeModule({ courseId: base.course.id, position: 1 });
+      const student = makeStudent("s@example.com");
+      // One single-attempt quiz per boundary score, so first = last = best.
+      const scores = [0.0, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0];
+      scores.forEach((score, i) => {
+        const lesson = makeLesson({ moduleId: m1.id, position: i + 1 });
+        const quiz = makeQuiz({ lessonId: lesson.id, title: `Quiz ${i}` });
+        makeAttempt({ userId: student.id, quizId: quiz.id, score, passed: score >= 0.7 });
+      });
+
+      const [dist] = getCourseQuizDistributions(base.instructor.id);
+      // 0.0 and 0.59 → 0–59; 0.6 → 60–69; 0.7 → 70–79; 0.8 → 80–89;
+      // 0.9 and 1.0 → 90–100.
+      expect(dist.buckets.map((b) => b.best)).toEqual([2, 1, 1, 1, 2]);
+      expect(dist.responseCount).toBe(7);
+    });
+
+    it("scopes to a single selected course", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const student = makeStudent("s@example.com");
+      for (const course of [base.course, course2]) {
+        const m = makeModule({ courseId: course.id, position: 1 });
+        const lesson = makeLesson({ moduleId: m.id, position: 1 });
+        const quiz = makeQuiz({ lessonId: lesson.id });
+        makeAttempt({ userId: student.id, quizId: quiz.id, score: 0.8, passed: true });
+      }
+
+      const onlyCourse2 = getCourseQuizDistributions(base.instructor.id, {
+        statuses: [],
+        courseId: course2.id,
+      });
+      expect(onlyCourse2).toHaveLength(1);
+      expect(onlyCourse2[0].courseId).toBe(course2.id);
+    });
+
+    it("returns one entry per in-scope course with quiz data", () => {
+      const course2 = makeCourse({ slug: "course-two" });
+      const empty = makeCourse({ slug: "empty-course" });
+      const student = makeStudent("s@example.com");
+      for (const course of [base.course, course2]) {
+        const m = makeModule({ courseId: course.id, position: 1 });
+        const lesson = makeLesson({ moduleId: m.id, position: 1 });
+        const quiz = makeQuiz({ lessonId: lesson.id });
+        makeAttempt({ userId: student.id, quizId: quiz.id, score: 0.75, passed: true });
+      }
+
+      const dists = getCourseQuizDistributions(base.instructor.id);
+      // `empty` has no quizzes/attempts, so it is omitted.
+      expect(dists.map((d) => d.courseId)).toEqual([base.course.id, course2.id]);
+      expect(dists.every((d) => d.courseId !== empty.id)).toBe(true);
     });
   });
 });
