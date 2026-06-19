@@ -7,6 +7,7 @@ import {
   BookOpen,
   LayoutDashboard,
   GraduationCap,
+  BarChart3,
   Shield,
   Tag,
   Users,
@@ -45,6 +46,9 @@ interface NavItem {
   to: string;
   icon: React.ReactNode;
   roles: UserRole[] | "all";
+  // Exact match only — set when a deeper route (e.g. /instructor/analytics)
+  // would otherwise keep this parent link (/instructor) highlighted.
+  end?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -65,6 +69,13 @@ const navItems: NavItem[] = [
     to: "/instructor",
     icon: <GraduationCap className="size-4" />,
     roles: [UserRole.Instructor],
+    end: true,
+  },
+  {
+    label: "Analytics Dashboard",
+    to: "/instructor/analytics",
+    icon: <BarChart3 className="size-4" />,
+    roles: [UserRole.Instructor, UserRole.Admin],
   },
   {
     label: "Manage Users",
@@ -128,6 +139,7 @@ export function Sidebar({
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
