@@ -1,13 +1,13 @@
 import type { QuizTimingHeatmap } from "~/services/analyticsService";
-import { ANALYTICS_TIMEZONE } from "~/services/analyticsService";
 
 // A hand-rolled CSS-grid heatmap of when students attempt quizzes: 7 rows
 // (days, Sun→Sat) × 24 columns (hours, 0→23), each cell shaded by how many
 // attempts fell in that day/hour bucket. This is deliberately *not* a Recharts
 // chart type — it is a plain grid of shaded `<td>`-like cells, so it renders the
 // same on the server and the client (no post-hydration mounting needed). Times
-// are pre-bucketed in `ANALYTICS_TIMEZONE` by the analytics service; this
-// component only paints the grid it is given.
+// are pre-bucketed by the analytics service and the bucketing zone arrives on the
+// `heatmap` object (`timezone`); this component only imports the *type*, never the
+// service value, so it does not pull server-only `~/db` code into the client.
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -30,15 +30,14 @@ function cellStyle(count: number, max: number): React.CSSProperties {
 }
 
 export function QuizTimingHeatmap({ heatmap }: { heatmap: QuizTimingHeatmap }) {
-  const { grid, totalAttempts } = heatmap;
+  const { grid, totalAttempts, timezone } = heatmap;
+  const zoneLabel = timezone.replace("_", " ");
 
   if (totalAttempts === 0) {
     return (
       <div className="flex h-48 flex-col items-center justify-center text-center text-sm text-muted-foreground">
         <p>No quiz attempts for the selected courses yet.</p>
-        <p className="mt-1 text-xs">
-          Times are shown in {ANALYTICS_TIMEZONE.replace("_", " ")}.
-        </p>
+        <p className="mt-1 text-xs">Times are shown in {zoneLabel}.</p>
       </div>
     );
   }
@@ -71,7 +70,7 @@ export function QuizTimingHeatmap({ heatmap }: { heatmap: QuizTimingHeatmap }) {
       <p className="mt-3 text-xs text-muted-foreground">
         Based on {totalAttempts.toLocaleString("en-US")} quiz{" "}
         {totalAttempts === 1 ? "attempt" : "attempts"}, bucketed by hour in{" "}
-        {ANALYTICS_TIMEZONE.replace("_", " ")}.
+        {zoneLabel}.
       </p>
     </div>
   );

@@ -1185,6 +1185,12 @@ describe("analyticsService", () => {
       expect(ANALYTICS_TIMEZONE).toBe("America/New_York");
     });
 
+    it("carries the bucketing timezone on the result (so the UI need not import it)", () => {
+      expect(getQuizTimingHeatmap(base.instructor.id).timezone).toBe(
+        ANALYTICS_TIMEZONE
+      );
+    });
+
     it("returns an all-zero 7x24 grid when there are no in-scope attempts", () => {
       const heatmap = getQuizTimingHeatmap(base.instructor.id);
       expect(heatmap.totalAttempts).toBe(0);
