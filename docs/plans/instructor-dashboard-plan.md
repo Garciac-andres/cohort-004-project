@@ -3,7 +3,7 @@
 > Source: GitHub issue **#69 — "Instructor Analytics Dashboard"**, sliced into tracer-bullet
 > sub-issues **#70** (data layer), **#71** (global overview page), **#72** (per-course tab).
 >
-> **Status:** #70 ✅ done · #71 ✅ done · #72 ⏳ pending.
+> **Status:** #70 ✅ done · #71 ✅ done · #72 ✅ done.
 
 This document breaks the PRD into sequenced, independently-reviewable build phases. Each
 phase lists what to build, the files it touches, and its done/test criteria. The data layer
@@ -116,7 +116,7 @@ PRD, UI routes/charts are verified manually, not unit-tested.)
 
 ---
 
-## Phase 3 — Per-course analytics tab (issue #72) ⏳
+## Phase 3 — Per-course analytics tab (issue #72) ✅
 
 **Goal:** a deep-dive tab at `/instructor/:courseId/analytics` inside the course editor.
 

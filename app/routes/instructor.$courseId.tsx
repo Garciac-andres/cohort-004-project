@@ -54,6 +54,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
   ArrowLeft,
+  BarChart3,
   BookOpen,
   Clock,
   Eye,
@@ -1193,6 +1194,15 @@ export default function InstructorCourseEditor({
             <Users className="size-4" />
             Students
           </TabsTrigger>
+          {/* Analytics lives on its own route, so this trigger is a Link styled
+              to match the (inactive) tab triggers rather than a TabsTrigger. */}
+          <Link
+            to={`/instructor/${course.id}/analytics`}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <BarChart3 className="size-4" />
+            Analytics
+          </Link>
         </TabsList>
 
         {/* Content Tab */}
