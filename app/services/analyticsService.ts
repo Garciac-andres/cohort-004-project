@@ -164,6 +164,83 @@ function courseScope(instructorId: number, filter: DashboardFilter) {
   );
 }
 
+// The single application timezone for time-of-day analytics (the quiz-timing
+// heatmap). SQLite has no timezone database, so UTC attempt timestamps are
+// converted to this zone in JS via `Intl` (which is DST-aware) before bucketing
+// — never in SQL. Change this one constant to re-base every time-of-day figure.
+export const ANALYTICS_TIMEZONE = "America/New_York";
+
+// A quiz-attempt heatmap bucketed by day-of-week (0 = Sunday … 6 = Saturday) and
+// hour-of-day (0–23) in `ANALYTICS_TIMEZONE`. `grid[day][hour]` is the attempt
+// count for that cell; `totalAttempts` is the number of attempts it is based on.
+export type QuizTimingHeatmap = {
+  grid: number[][]; // 7 rows (days) × 24 columns (hours)
+  totalAttempts: number;
+};
+
+// Map an `Intl` short weekday name to a 0 (Sunday) … 6 (Saturday) index.
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+// Convert a UTC ISO timestamp to its day-of-week / hour-of-day in
+// `ANALYTICS_TIMEZONE`. `Intl` applies that zone's UTC offset *for that date*, so
+// DST is handled automatically and a timestamp can land on a different calendar
+// day than it has in UTC. `hourCycle: "h23"` keeps midnight as hour 0 (not 24).
+function zonedDayHour(iso: string): { day: number; hour: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ANALYTICS_TIMEZONE,
+    weekday: "short",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(iso));
+
+  const weekday = parts.find((p) => p.type === "weekday")?.value ?? "Sun";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  return { day: WEEKDAY_INDEX[weekday] ?? 0, hour };
+}
+
+/**
+ * A 7×24 (day-of-week × hour-of-day) heatmap of quiz-attempt counts across the
+ * instructor's quizzes, honouring the dashboard filter down to a single course.
+ * Times are bucketed in `ANALYTICS_TIMEZONE`: the raw UTC timestamps are fetched
+ * (one set-based query joining attempts → quizzes → lessons → modules → courses)
+ * and converted to that zone in JS via `Intl` before bucketing, since SQLite has
+ * no timezone database. Returns an all-zero grid (and `totalAttempts: 0`) when
+ * there are no in-scope attempts, so the UI can show an empty state.
+ */
+export function getQuizTimingHeatmap(
+  instructorId: number,
+  filter: DashboardFilter = ALL_COURSES_FILTER
+): QuizTimingHeatmap {
+  const rows = db
+    .select({ attemptedAt: quizAttempts.attemptedAt })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(courseScope(instructorId, filter))
+    .all();
+
+  const grid: number[][] = Array.from({ length: 7 }, () =>
+    new Array<number>(24).fill(0)
+  );
+
+  for (const row of rows) {
+    const { day, hour } = zonedDayHour(row.attemptedAt);
+    grid[day][hour]++;
+  }
+
+  return { grid, totalAttempts: rows.length };
+}
+
 /**
  * Headline metrics across all of an instructor's courses. `since` (ISO string)
  * filters revenue/sales (`purchases.createdAt`) and student counts

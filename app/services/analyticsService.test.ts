@@ -23,7 +23,8 @@ import {
   getInstructorCompletion,
   getInstructorAverageQuizScore,
   getCourseQuizDistributions,
-  getCourseTableRows,
+  getQuizTimingHeatmap,
+  ANALYTICS_TIMEZONE,
   ALL_COURSES_FILTER,
 } from "./analyticsService";
 
@@ -1171,239 +1172,119 @@ describe("analyticsService", () => {
     });
   });
 
-  describe("getCourseTableRows", () => {
-    it("returns an empty array when there are no in-scope courses", () => {
-      // base.course is Published, so filtering to Archived leaves nothing.
-      expect(
-        getCourseTableRows(base.instructor.id, {
-          statuses: [schema.CourseStatus.Archived],
-          courseId: null,
-        })
-      ).toEqual([]);
+  describe("getQuizTimingHeatmap", () => {
+    // Set up one quiz on base.course and return its id, for attaching attempts.
+    function seedQuiz(courseId: number) {
+      const m = makeModule({ courseId, position: 1 });
+      const lesson = makeLesson({ moduleId: m.id, position: 1 });
+      return makeQuiz({ lessonId: lesson.id }).id;
+    }
+
+    it("uses America/New_York as the single analytics timezone", () => {
+      expect(ANALYTICS_TIMEZONE).toBe("America/New_York");
     });
 
-    it("returns a zeroed row for a brand-new course with no data", () => {
-      const [row] = getCourseTableRows(base.instructor.id);
-      expect(row).toEqual({
-        courseId: base.course.id,
-        courseTitle: base.course.title,
-        status: schema.CourseStatus.Published,
-        students: 0,
-        earnings: 0,
-        completionPct: 0,
-        reached100: 0,
-        worstDropLessonTitle: null,
-        worstDropPct: null,
+    it("returns an all-zero 7x24 grid when there are no in-scope attempts", () => {
+      const heatmap = getQuizTimingHeatmap(base.instructor.id);
+      expect(heatmap.totalAttempts).toBe(0);
+      expect(heatmap.grid).toHaveLength(7);
+      expect(heatmap.grid.every((row) => row.length === 24)).toBe(true);
+      expect(heatmap.grid.flat().every((count) => count === 0)).toBe(true);
+    });
+
+    it("buckets timestamps by day/hour in the fixed timezone, DST-aware and across the date boundary", () => {
+      const quizId = seedQuiz(base.course.id);
+      const student = makeStudent("s@example.com");
+
+      // 2026-06-15 02:00 UTC → in EDT (UTC-4, summer) this is 2026-06-14 22:00,
+      // i.e. the *previous* calendar day: Sunday (day 0), hour 22.
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-06-15T02:00:00.000Z",
       });
-    });
-
-    it("computes the headline figures and worst drop-off for a course", () => {
-      const m1 = makeModule({ courseId: base.course.id, position: 1 });
-      const lessonA = makeLesson({ moduleId: m1.id, position: 1, title: "A" });
-      const lessonB = makeLesson({ moduleId: m1.id, position: 2, title: "B" });
-
-      // s1: officially completed and finished every lesson (reached 100%).
-      const s1 = makeStudent("s1@example.com");
-      makeEnrollment({
-        userId: s1.id,
-        courseId: base.course.id,
-        completedAt: "2026-06-01T00:00:00.000Z",
+      // 2026-07-01 12:00 UTC → inside DST (EDT, UTC-4) → 08:00 Wednesday (day 3).
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
       });
-      completeLesson({ userId: s1.id, lessonId: lessonA.id });
-      completeLesson({ userId: s1.id, lessonId: lessonB.id });
-
-      // s2: still in progress (a non-completer), only finished lesson A.
-      const s2 = makeStudent("s2@example.com");
-      makeEnrollment({ userId: s2.id, courseId: base.course.id });
-      completeLesson({ userId: s2.id, lessonId: lessonA.id });
-
-      makePurchase({ userId: s1.id, courseId: base.course.id, pricePaid: 5000 });
-      makePurchase({ userId: s2.id, courseId: base.course.id, pricePaid: 3000 });
-
-      const [row] = getCourseTableRows(base.instructor.id);
-      expect(row.students).toBe(2);
-      expect(row.earnings).toBe(8000);
-      expect(row.completionPct).toBe(50); // 1 of 2 officially completed
-      expect(row.reached100).toBe(1);
-      // Non-completer cohort = {s2}. Lesson A: 100%, Lesson B: 0% → worst drop
-      // of 100 points lands on lesson B.
-      expect(row.worstDropLessonTitle).toBe("B");
-      expect(row.worstDropPct).toBe(100);
-    });
-
-    it("orders the funnel by module then lesson position and flags the steepest drop", () => {
-      const m1 = makeModule({ courseId: base.course.id, position: 1 });
-      const m2 = makeModule({ courseId: base.course.id, position: 2 });
-      const a = makeLesson({ moduleId: m1.id, position: 1, title: "A" });
-      const b = makeLesson({ moduleId: m1.id, position: 2, title: "B" });
-      const c = makeLesson({ moduleId: m2.id, position: 1, title: "C" });
-
-      const students = ["s1", "s2", "s3", "s4"].map((n) =>
-        makeStudent(`${n}@example.com`)
-      );
-      students.forEach((s) =>
-        makeEnrollment({ userId: s.id, courseId: base.course.id })
-      );
-
-      // Funnel (4 non-completers): A 4/4=100, B 2/4=50, C 1/4=25.
-      // Drops: A→B = 50, B→C = 25. Worst drop is into B.
-      students.forEach((s) => completeLesson({ userId: s.id, lessonId: a.id }));
-      completeLesson({ userId: students[0].id, lessonId: b.id });
-      completeLesson({ userId: students[1].id, lessonId: b.id });
-      completeLesson({ userId: students[0].id, lessonId: c.id });
-
-      const [row] = getCourseTableRows(base.instructor.id);
-      expect(row.worstDropLessonTitle).toBe("B");
-      expect(row.worstDropPct).toBe(50);
-      // Sanity: the cross-module lesson C exists and is ordered last in the funnel.
-      void c;
-    });
-
-    it("excludes course completers from the drop-off funnel", () => {
-      const m1 = makeModule({ courseId: base.course.id, position: 1 });
-      const l1 = makeLesson({ moduleId: m1.id, position: 1, title: "L1" });
-      const l2 = makeLesson({ moduleId: m1.id, position: 2, title: "L2" });
-
-      const n1 = makeStudent("n1@example.com");
-      const n2 = makeStudent("n2@example.com");
-      makeEnrollment({ userId: n1.id, courseId: base.course.id });
-      makeEnrollment({ userId: n2.id, courseId: base.course.id });
-
-      // A finisher who completed the course AND every lesson — must not dilute
-      // the funnel (otherwise the cohort would be 3 and the percentages shift).
-      const finisher = makeStudent("finisher@example.com");
-      makeEnrollment({
-        userId: finisher.id,
-        courseId: base.course.id,
-        completedAt: "2026-06-01T00:00:00.000Z",
+      // 2026-01-15 12:00 UTC → outside DST (EST, UTC-5) → 07:00 Thursday (day 4).
+      makeAttempt({
+        userId: student.id,
+        quizId,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-01-15T12:00:00.000Z",
       });
-      completeLesson({ userId: finisher.id, lessonId: l1.id });
-      completeLesson({ userId: finisher.id, lessonId: l2.id });
 
-      // Of the 2 non-completers, only n1 finished L1; nobody finished L2.
-      completeLesson({ userId: n1.id, lessonId: l1.id });
-
-      const [row] = getCourseTableRows(base.instructor.id);
-      // Cohort = 2 non-completers. L1 = 1/2 = 50%, L2 = 0% → drop of 50 into L2.
-      expect(row.worstDropLessonTitle).toBe("L2");
-      expect(row.worstDropPct).toBe(50);
+      const { grid, totalAttempts } = getQuizTimingHeatmap(base.instructor.id);
+      expect(totalAttempts).toBe(3);
+      expect(grid[0][22]).toBe(1); // Sunday 22:00 (date-boundary crossing)
+      expect(grid[3][8]).toBe(1); // Wednesday 08:00 (EDT, DST)
+      expect(grid[4][7]).toBe(1); // Thursday 07:00 (EST, no DST)
+      // Every other cell is empty.
+      expect(grid.flat().reduce((sum, n) => sum + n, 0)).toBe(3);
     });
 
-    it("reports no drop-off for degenerate funnels (no lessons, single lesson, all completed)", () => {
-      // No lessons.
-      const s1 = makeStudent("s1@example.com");
-      makeEnrollment({ userId: s1.id, courseId: base.course.id });
-      expect(getCourseTableRows(base.instructor.id)[0].worstDropPct).toBeNull();
-
-      // Single lesson: no consecutive pair to drop between.
-      const single = makeCourse({ slug: "single-lesson" });
-      const sm = makeModule({ courseId: single.id, position: 1 });
-      makeLesson({ moduleId: sm.id, position: 1, title: "Only" });
-      const s2 = makeStudent("s2@example.com");
-      makeEnrollment({ userId: s2.id, courseId: single.id });
-      const singleRow = getCourseTableRows(base.instructor.id, {
-        statuses: [],
-        courseId: single.id,
-      })[0];
-      expect(singleRow.worstDropLessonTitle).toBeNull();
-      expect(singleRow.worstDropPct).toBeNull();
-
-      // All enrolled students completed the course → empty non-completer cohort.
-      const allDone = makeCourse({ slug: "all-done" });
-      const am = makeModule({ courseId: allDone.id, position: 1 });
-      makeLesson({ moduleId: am.id, position: 1, title: "X" });
-      makeLesson({ moduleId: am.id, position: 2, title: "Y" });
-      const s3 = makeStudent("s3@example.com");
-      makeEnrollment({
-        userId: s3.id,
-        courseId: allDone.id,
-        completedAt: "2026-06-01T00:00:00.000Z",
-      });
-      const allDoneRow = getCourseTableRows(base.instructor.id, {
-        statuses: [],
-        courseId: allDone.id,
-      })[0];
-      expect(allDoneRow.worstDropPct).toBeNull();
-    });
-
-    it("returns one row per in-scope course, ordered by id, and re-scopes with the filter", () => {
+    it("aggregates across the instructor's courses but re-scopes to one course via the filter", () => {
       const course2 = makeCourse({ slug: "course-two" });
-      const draft = makeCourse({
-        slug: "draft-course",
-        status: schema.CourseStatus.Draft,
+      const quiz1 = seedQuiz(base.course.id);
+      const quiz2 = seedQuiz(course2.id);
+      const student = makeStudent("s@example.com");
+
+      // Both attempts land on the same cell so scoping is the only difference:
+      // 2026-07-01 12:00 UTC → Wednesday (day 3) 08:00 EDT.
+      makeAttempt({
+        userId: student.id,
+        quizId: quiz1,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
+      makeAttempt({
+        userId: student.id,
+        quizId: quiz2,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
       });
 
-      const allRows = getCourseTableRows(base.instructor.id);
-      expect(allRows.map((r) => r.courseId)).toEqual([
-        base.course.id,
-        course2.id,
-        draft.id,
-      ]);
+      // Default: aggregate across both courses.
+      const all = getQuizTimingHeatmap(base.instructor.id);
+      expect(all.totalAttempts).toBe(2);
+      expect(all.grid[3][8]).toBe(2);
 
-      // Narrow to a single course.
-      const onlyCourse2 = getCourseTableRows(base.instructor.id, {
+      // Filtered to a single course: only that course's attempt counts.
+      const onlyCourse2 = getQuizTimingHeatmap(base.instructor.id, {
         statuses: [],
         courseId: course2.id,
       });
-      expect(onlyCourse2.map((r) => r.courseId)).toEqual([course2.id]);
-
-      // Narrow by status.
-      const publishedOnly = getCourseTableRows(base.instructor.id, {
-        statuses: [schema.CourseStatus.Published],
-        courseId: null,
-      });
-      expect(publishedOnly.map((r) => r.courseId)).toEqual([
-        base.course.id,
-        course2.id,
-      ]);
+      expect(onlyCourse2.totalAttempts).toBe(1);
+      expect(onlyCourse2.grid[3][8]).toBe(1);
     });
 
-    it("excludes other instructors' courses", () => {
+    it("excludes attempts on other instructors' courses", () => {
       const other = makeInstructor("other@example.com");
-      makeCourse({ slug: "other-course", instructorId: other.id });
+      const otherCourse = makeCourse({
+        slug: "other-course",
+        instructorId: other.id,
+      });
+      const otherQuiz = seedQuiz(otherCourse.id);
+      const student = makeStudent("s@example.com");
+      makeAttempt({
+        userId: student.id,
+        quizId: otherQuiz,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-07-01T12:00:00.000Z",
+      });
 
-      const rows = getCourseTableRows(base.instructor.id);
-      expect(rows.map((r) => r.courseId)).toEqual([base.course.id]);
-    });
-
-    it("aggregates correctly over a larger seeded dataset (set-based, no per-student loop)", () => {
-      const m1 = makeModule({ courseId: base.course.id, position: 1 });
-      const l1 = makeLesson({ moduleId: m1.id, position: 1, title: "L1" });
-      const l2 = makeLesson({ moduleId: m1.id, position: 2, title: "L2" });
-
-      // 50 enrolled students: the first 10 officially completed and finished both
-      // lessons; the remaining 40 are non-completers — all 40 finished L1, but
-      // only 10 of them finished L2 (a 75-point drop into L2).
-      const COMPLETERS = 10;
-      const NON_COMPLETERS = 40;
-      for (let i = 0; i < COMPLETERS; i++) {
-        const s = makeStudent(`done-${i}@example.com`);
-        makeEnrollment({
-          userId: s.id,
-          courseId: base.course.id,
-          completedAt: "2026-06-01T00:00:00.000Z",
-        });
-        completeLesson({ userId: s.id, lessonId: l1.id });
-        completeLesson({ userId: s.id, lessonId: l2.id });
-        makePurchase({ userId: s.id, courseId: base.course.id, pricePaid: 100 });
-      }
-      for (let i = 0; i < NON_COMPLETERS; i++) {
-        const s = makeStudent(`wip-${i}@example.com`);
-        makeEnrollment({ userId: s.id, courseId: base.course.id });
-        completeLesson({ userId: s.id, lessonId: l1.id });
-        if (i < 10) completeLesson({ userId: s.id, lessonId: l2.id });
-      }
-
-      const [row] = getCourseTableRows(base.instructor.id);
-      expect(row.students).toBe(COMPLETERS + NON_COMPLETERS); // 50
-      // Reached-100% counts everyone who finished every lesson, official or not:
-      // the 10 completers plus the 10 non-completers who also finished both.
-      expect(row.reached100).toBe(COMPLETERS + 10); // 20
-      expect(row.completionPct).toBe((COMPLETERS / 50) * 100); // 20 (official)
-      expect(row.earnings).toBe(COMPLETERS * 100); // 1000
-      // Funnel over the 40 non-completers: L1 40/40 = 100%, L2 10/40 = 25%.
-      expect(row.worstDropLessonTitle).toBe("L2");
-      expect(row.worstDropPct).toBe(75);
+      expect(getQuizTimingHeatmap(base.instructor.id).totalAttempts).toBe(0);
     });
   });
 });
