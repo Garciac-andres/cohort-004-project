@@ -51,10 +51,12 @@ export async function loader({ request }: Route.LoaderArgs) {
       })
     : [];
 
-  // Notifications are an instructor-only feature; only populate (and only show
-  // the bell) for instructors.
+  // Notifications are shown to instructors (enrollment alerts) and team admins
+  // (coupon redemption alerts); populate (and show the bell) for either.
+  const userIsTeamAdmin = currentUserId ? isTeamAdmin(currentUserId) : false;
   const notifications =
-    currentUserId && currentUser?.role === UserRole.Instructor
+    currentUserId &&
+    (currentUser?.role === UserRole.Instructor || userIsTeamAdmin)
       ? {
           unreadCount: getUnreadCount(currentUserId),
           items: getNotifications({
@@ -87,7 +89,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     devCountry,
     countryTierInfo,
     countries: COUNTRIES,
-    isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    isTeamAdmin: userIsTeamAdmin,
   };
 }
 

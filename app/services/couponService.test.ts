@@ -18,6 +18,7 @@ import {
   getCouponsForTeam,
   redeemCoupon,
 } from "./couponService";
+import { getNotifications } from "./notificationService";
 
 // Helper: create a team with admin and a purchase for coupon generation
 function setupTeamAndPurchase(country: string | null = "US") {
@@ -273,6 +274,184 @@ describe("couponService", () => {
       const result = redeemCoupon(coupon.code, redeemer.id, "PL");
 
       expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("coupon redemption notifications", () => {
+    it("notifies the team admin with a coupon_redemption notification", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      // base.user is the team admin (see setupTeamAndPurchase).
+      const adminNotifications = getNotifications({
+        userId: base.user.id,
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(adminNotifications).toHaveLength(1);
+      expect(adminNotifications[0].type).toBe(
+        schema.NotificationType.CouponRedemption
+      );
+    });
+
+    it("titles the notification 'Seat Claimed' and links to /team", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      const [notification] = getNotifications({
+        userId: base.user.id,
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(notification.title).toBe("Seat Claimed");
+      expect(notification.linkUrl).toBe("/team");
+    });
+
+    it("messages the redeemer name, course title, and seat counts", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      // One coupon total; after redemption, 0 of 1 remain.
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      const [notification] = getNotifications({
+        userId: base.user.id,
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(notification.message).toBe(
+        "Redeemer redeemed a coupon for Test Course (0 of 1 seats remaining)"
+      );
+    });
+
+    it("counts remaining seats per course on the team", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      // 3 coupons for this course; redeeming one leaves 2 of 3.
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 3);
+
+      // A second course on the same team must not affect the count.
+      const course2 = testDb
+        .insert(schema.courses)
+        .values({
+          title: "Second Course",
+          slug: "second-course",
+          description: "Another course",
+          instructorId: base.instructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+      const purchase2 = testDb
+        .insert(schema.purchases)
+        .values({
+          userId: base.user.id,
+          courseId: course2.id,
+          pricePaid: 5000,
+          country: "US",
+        })
+        .returning()
+        .get();
+      generateCoupons(team.id, course2.id, purchase2.id, 5);
+
+      const redeemer = createRedeemer();
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      const [notification] = getNotifications({
+        userId: base.user.id,
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(notification.message).toContain("(2 of 3 seats remaining)");
+    });
+
+    it("notifies every admin of the team", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      // Add a second admin to the same team.
+      const secondAdmin = testDb
+        .insert(schema.users)
+        .values({
+          name: "Second Admin",
+          email: "second-admin@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+      testDb
+        .insert(schema.teamMembers)
+        .values({
+          teamId: team.id,
+          userId: secondAdmin.id,
+          role: schema.TeamMemberRole.Admin,
+        })
+        .run();
+
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      expect(
+        getNotifications({ userId: base.user.id, limit: 10, offset: 0 })
+      ).toHaveLength(1);
+      expect(
+        getNotifications({ userId: secondAdmin.id, limit: 10, offset: 0 })
+      ).toHaveLength(1);
+    });
+
+    it("does not notify non-admin team members", () => {
+      const { team, purchase } = setupTeamAndPurchase();
+      const member = testDb
+        .insert(schema.users)
+        .values({
+          name: "Plain Member",
+          email: "member@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+      testDb
+        .insert(schema.teamMembers)
+        .values({
+          teamId: team.id,
+          userId: member.id,
+          role: schema.TeamMemberRole.Member,
+        })
+        .run();
+
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      redeemCoupon(coupon.code, redeemer.id, "US");
+
+      expect(
+        getNotifications({ userId: member.id, limit: 10, offset: 0 })
+      ).toHaveLength(0);
+    });
+
+    it("creates no notification when redemption fails", () => {
+      const { team, purchase } = setupTeamAndPurchase("US");
+      const [coupon] = generateCoupons(team.id, base.course.id, purchase.id, 1);
+      const redeemer = createRedeemer();
+
+      // Country mismatch → redemption rejected.
+      const result = redeemCoupon(coupon.code, redeemer.id, "PL");
+      expect(result.ok).toBe(false);
+
+      expect(
+        getNotifications({ userId: base.user.id, limit: 10, offset: 0 })
+      ).toHaveLength(0);
     });
   });
 });

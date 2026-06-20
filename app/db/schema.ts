@@ -41,6 +41,7 @@ export enum TeamMemberRole {
 // (comments, ratings, quiz completions) without a schema change.
 export enum NotificationType {
   Enrollment = "enrollment",
+  CouponRedemption = "coupon_redemption",
 }
 
 // ─── Tables ───
