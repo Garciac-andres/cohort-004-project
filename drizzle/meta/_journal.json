@@ -43,6 +43,13 @@
       "when": 1781800577515,
       "tag": "0005_warm_the_executioner",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781913491116,
+      "tag": "0006_striped_mantis",
+      "breakpoints": true
     }
   ]
 }
