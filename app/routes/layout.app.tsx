@@ -13,6 +13,11 @@ import {
 } from "~/services/progressService";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { isTeamAdmin } from "~/services/teamService";
+import {
+  getNotifications,
+  getUnreadCount,
+} from "~/services/notificationService";
+import { UserRole } from "~/db/schema";
 
 export async function loader({ request }: Route.LoaderArgs) {
   const users = getAllUsers();
@@ -46,8 +51,32 @@ export async function loader({ request }: Route.LoaderArgs) {
       })
     : [];
 
+  // Notifications are shown to instructors (enrollment alerts) and team admins
+  // (coupon redemption alerts); populate (and show the bell) for either.
+  const userIsTeamAdmin = currentUserId ? isTeamAdmin(currentUserId) : false;
+  const notifications =
+    currentUserId &&
+    (currentUser?.role === UserRole.Instructor || userIsTeamAdmin)
+      ? {
+          unreadCount: getUnreadCount(currentUserId),
+          items: getNotifications({
+            userId: currentUserId,
+            limit: 5,
+            offset: 0,
+          }).map((n) => ({
+            id: n.id,
+            title: n.title,
+            message: n.message,
+            linkUrl: n.linkUrl,
+            isRead: n.isRead,
+            createdAt: n.createdAt,
+          })),
+        }
+      : null;
+
   return {
     users: users.map((u) => ({ id: u.id, name: u.name, role: u.role })),
+    notifications,
     currentUser: currentUser
       ? {
           id: currentUser.id,
@@ -60,7 +89,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     devCountry,
     countryTierInfo,
     countries: COUNTRIES,
-    isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    isTeamAdmin: userIsTeamAdmin,
   };
 }
 
@@ -73,6 +102,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    notifications,
   } = loaderData;
 
   return (
@@ -81,6 +111,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        notifications={notifications}
       />
       <main className="flex-1 overflow-y-auto">
         <Outlet />

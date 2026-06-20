@@ -49,7 +49,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const user = getUserById(currentUserId);
 
-  if (!user || user.role !== UserRole.Instructor) {
+  if (
+    !user ||
+    (user.role !== UserRole.Instructor && user.role !== UserRole.Admin)
+  ) {
     throw data("Only instructors can create courses.", {
       status: 403,
     });
@@ -69,7 +72,10 @@ export async function action({ request }: Route.ActionArgs) {
 
   const user = getUserById(currentUserId);
 
-  if (!user || user.role !== UserRole.Instructor) {
+  if (
+    !user ||
+    (user.role !== UserRole.Instructor && user.role !== UserRole.Admin)
+  ) {
     throw data("Only instructors can create courses.", { status: 403 });
   }
 

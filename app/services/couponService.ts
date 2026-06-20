@@ -1,6 +1,16 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { db } from "~/db";
-import { coupons, purchases, enrollments } from "~/db/schema";
+import {
+  coupons,
+  purchases,
+  enrollments,
+  courses,
+  users,
+  teamMembers,
+  TeamMemberRole,
+  NotificationType,
+} from "~/db/schema";
+import { createNotification } from "./notificationService";
 import crypto from "crypto";
 
 // ─── Coupon Service ───
@@ -115,5 +125,58 @@ export function redeemCoupon(
     .returning()
     .get();
 
+  notifyTeamAdminsOfRedemption(coupon, userId);
+
   return { ok: true, enrollment };
+}
+
+// Notify every admin of the coupon's team that a seat was claimed. The message
+// names the redeemer and course and reports remaining/total seats for that
+// course on that team, baked in at creation time. Guarded lookups so a missing
+// row never breaks the redemption itself.
+function notifyTeamAdminsOfRedemption(
+  coupon: typeof coupons.$inferSelect,
+  redeemerId: number
+) {
+  const redeemer = db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, redeemerId))
+    .get();
+  const course = db
+    .select({ title: courses.title })
+    .from(courses)
+    .where(eq(courses.id, coupon.courseId))
+    .get();
+
+  if (!redeemer || !course) return;
+
+  // Snapshot of seat utilization for this course on this team, baked into the
+  // message. The redeemed coupon is already marked consumed at this point.
+  const courseCoupons = getCouponsForTeam(coupon.teamId, coupon.courseId);
+  const totalSeats = courseCoupons.length;
+  const remainingSeats = courseCoupons.filter(
+    (c) => c.redeemedByUserId === null
+  ).length;
+
+  const admins = db
+    .select({ userId: teamMembers.userId })
+    .from(teamMembers)
+    .where(
+      and(
+        eq(teamMembers.teamId, coupon.teamId),
+        eq(teamMembers.role, TeamMemberRole.Admin)
+      )
+    )
+    .all();
+
+  for (const admin of admins) {
+    createNotification({
+      recipientUserId: admin.userId,
+      type: NotificationType.CouponRedemption,
+      title: "Seat Claimed",
+      message: `${redeemer.name} redeemed a coupon for ${course.title} (${remainingSeats} of ${totalSeats} seats remaining)`,
+      linkUrl: "/team",
+    });
+  }
 }

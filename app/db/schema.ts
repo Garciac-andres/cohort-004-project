@@ -36,6 +36,14 @@ export enum TeamMemberRole {
   Member = "member",
 }
 
+// Generic notification kinds. Only "enrollment" is produced today; the enum
+// (and the title/message/linkUrl schema) is intentionally open for future types
+// (comments, ratings, quiz completions) without a schema change.
+export enum NotificationType {
+  Enrollment = "enrollment",
+  CouponRedemption = "coupon_redemption",
+}
+
 // ─── Tables ───
 
 export const users = sqliteTable("users", {
@@ -334,6 +342,31 @@ export const coupons = sqliteTable("coupons", {
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
 });
+
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipientUserId: integer("recipient_user_id")
+      .notNull()
+      .references(() => users.id),
+    type: text("type").notNull().$type<NotificationType>(),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    // Where clicking the notification navigates, e.g. /instructor/5/students.
+    linkUrl: text("link_url").notNull(),
+    isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => ({
+    // The layout loader queries by recipient on every navigation.
+    recipientIdx: index("notifications_recipient_idx").on(
+      table.recipientUserId
+    ),
+  })
+);
 
 export const videoWatchEvents = sqliteTable("video_watch_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
